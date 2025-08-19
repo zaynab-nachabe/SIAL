@@ -231,7 +231,7 @@ def plot_membrane_potentials(data, pattern_labels, pattern_start_times, experime
     
     axes[0].plot(times, vm_traces[0], 'b-', label='Membrane Potential', alpha=0.8, linewidth=1.5)
     axes[0].set_ylabel('Membrane Potential (mV)')
-    axes[0].set_title('Output Neuron 0 (Pattern 0 specialist)', color='blue')
+    axes[0].set_title('Output Neuron 0 ', color='blue')
     axes[0].grid(True, alpha=0.3)
     
     axes[0].axhline(y=neuron_params['v_thresh'], color='k', linestyle='-', alpha=0.5, label='Threshold')
@@ -239,7 +239,7 @@ def plot_membrane_potentials(data, pattern_labels, pattern_start_times, experime
     axes[1].plot(times, vm_traces[1], 'r-', label='Membrane Potential', alpha=0.8, linewidth=1.5)
     axes[1].set_xlabel('Time (ms)')
     axes[1].set_ylabel('Membrane Potential (mV)')
-    axes[1].set_title('Output Neuron 1 (Pattern 1 specialist)', color='red')
+    axes[1].set_title('Output Neuron 1 ', color='red')
     axes[1].grid(True, alpha=0.3)
     
     axes[1].axhline(y=neuron_params['v_thresh'], color='k', linestyle='-', alpha=0.5, label='Threshold')
