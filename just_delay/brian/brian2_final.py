@@ -22,10 +22,8 @@ def check_stop_condition(delays, post_idx, c=8.5):
     For post-synaptic neuron j, stop delay learning on all d_i,j if any d_k,j < c
     where c > B_minus (we use c=8.5 > B_minus=8.0)
     """
-    # Get all delays targeting this post-synaptic neuron
-    delays_to_post = delays[:, post_idx]  # delays from all pre-synaptic neurons
+    delays_to_post = delays[:, post_idx]
     
-    # Check if any delay is below the threshold
     min_delay = np.min(delays_to_post)
     stop_learning = min_delay < c
     
@@ -39,7 +37,6 @@ def apply_delay_modulation(delays, modulation_step=0.01):
     modulated_delays = delays.copy()
     modulated_delays += modulation_step
     
-    # Clip to reasonable range (don't let delays grow indefinitely)
     modulated_delays = np.clip(modulated_delays, 0.1, 8.0)
     
     return modulated_delays
@@ -667,8 +664,8 @@ def main():
         all_weights = initial_weights.flatten()
         # Weight statistics - suppressed for minimal output
         
-        # Pattern classification accuracy (use final cycle spikes)
-        # Pattern classification analysis - minimal output
+        # Pattern classification accuracy
+        # Pattern classification analysis 
         pattern_to_label = {"pattern_1": 0, "pattern_2": 1, "pattern_3": 2}
         label_to_pattern = {0: "pattern_1", 1: "pattern_2", 2: "pattern_3"}
         predictions = []
@@ -676,10 +673,10 @@ def main():
         detailed_results = []
         
         # Initialize confusion matrix
-        confusion_matrix = np.zeros((4, 3))  # 4 rows: 3 patterns + no response, 3 cols: 3 patterns
+        confusion_matrix = np.zeros((4, 3))
         pattern_responses = {"pattern_1": [], "pattern_2": [], "pattern_3": []}
         
-        # Pattern analysis - minimal output only
+        # Pattern analysis
         for pattern_idx, pattern in enumerate(pattern_sequence):
             pattern_start = pattern["start_time"]
             pattern_end = pattern_start + 15  # Use full pattern interval (15ms)
@@ -687,19 +684,19 @@ def main():
             
             # Count spikes per output neuron in this pattern window (final cycle only)
             neuron_spikes = [0, 0, 0]
-            spike_details = [[], [], []]  # Store actual spike times for each neuron
+            spike_details = [[], [], []]
             
             for neuron_idx, spike_time in zip(output_monitor.i, output_monitor.t/ms):
                 if pattern_start <= spike_time < pattern_end:
                     neuron_spikes[neuron_idx] += 1
                     spike_details[neuron_idx].append(spike_time)
             
-            # Predict based on max spikes
+            # Predict
             if max(neuron_spikes) > 0:
                 predicted = neuron_spikes.index(max(neuron_spikes))
                 predicted_pattern = label_to_pattern[predicted]
             else:
-                predicted = -1  # No response
+                predicted = -1
                 predicted_pattern = "none"
             
             true_label = pattern_to_label[pattern_name]
@@ -730,9 +727,9 @@ def main():
                 "correct": predicted == true_label
             })
             
-            # Only show first 10 patterns and errors - suppress rest for minimal output
+            # Only show first 10 patterns and errors
             if pattern_idx < 5 or not result["correct"]:
-                pass  # Suppress individual pattern outputs
+                pass
         
         import builtins
         correct = builtins.sum(1 for pred, true in zip(predictions, true_labels) if pred == true)
@@ -749,7 +746,7 @@ def main():
             row_str = f"{pattern_names[true_idx]:>4s}  "
             for pred_idx in range(3):
                 row_str += f"{int(confusion_matrix[pred_idx, true_idx]):4d} "
-            row_str += f"{int(confusion_matrix[3, true_idx]):4d}"  # No response
+            row_str += f"{int(confusion_matrix[3, true_idx]):4d}" 
             print(row_str)
         
         plot_accuracy_analysis(confusion_matrix, overall_accuracy, save_path="accuracy_analysis.png")
