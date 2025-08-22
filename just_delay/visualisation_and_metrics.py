@@ -40,12 +40,10 @@ def plot_combined_membrane_potentials(vm_traces, v_thresh=-52.5, save_path=None)
     # Add chunk boundaries as vertical lines
     num_chunks = len(vm_traces)
     if num_chunks > 20:
-        # Show fewer chunk boundaries for clarity when there are many chunks
         interval = max(1, num_chunks // 10)
         for i in range(1, len(chunk_boundaries)-1, interval):
             ax.axvline(x=chunk_boundaries[i], color='gray', linestyle='--', alpha=0.3)
     else:
-        # Show all chunk boundaries when there are fewer chunks
         for boundary in chunk_boundaries[1:-1]:
             ax.axvline(x=boundary, color='gray', linestyle='--', alpha=0.3)
     
@@ -146,17 +144,12 @@ def calculate_specialization_score(pattern_responses):
     Calculate a specialization score between 0 and 1, where:
     - 0 means no specialization (both neurons respond equally to both patterns)
     - 1 means perfect specialization (each neuron responds exclusively to one pattern)
-    
-    The score is calculated based on how much each neuron prefers one pattern over the other,
-    combined with how complementary their specializations are.
     """
-    # Calculating how strongly each neuron prefers one pattern over the other
     output0_p0 = pattern_responses['output_0']['pattern_0']
     output0_p1 = pattern_responses['output_0']['pattern_1']
     output1_p0 = pattern_responses['output_1']['pattern_0']
     output1_p1 = pattern_responses['output_1']['pattern_1']
     
-    # Pattern preference strength for each neuron (0 to 1)
     if output0_p0 + output0_p1 > 0:
         output0_preference = abs(output0_p0 - output0_p1) / (output0_p0 + output0_p1)
     else:
@@ -173,8 +166,7 @@ def calculate_specialization_score(pattern_responses):
     
     # Complementary specialization bonus (1 if neurons prefer different patterns, 0 if same)
     complementary = 1.0 if output0_prefers_p0 != output1_prefers_p0 else 0.0
-    
-    # Combine individual preference strengths with complementary bonus
+
     specialization_score = (output0_preference + output1_preference) / 2 * complementary
     
     metrics = {
@@ -194,34 +186,27 @@ def create_results_directory(experiment_name):
     return results_dir
 
 def plot_specialization_score(specialization_scores, curriculum_phases=None, save_path=None):
-    """
-    Plot the evolution of the specialization score throughout the simulation.
-    """
     plt.figure(figsize=(12, 6))
     
     chunks = list(range(len(specialization_scores)))
     
-    # Plot background colors for curriculum phases if provided
     if curriculum_phases:
         phase_colors = {
-            'isolated': '#e6f7ff',  # Light blue
-            'blocked': '#fff2e6',    # Light orange
-            'mixed': '#f2ffe6'       # Light green
+            'isolated': '#e6f7ff',
+            'blocked': '#fff2e6',  
+            'mixed': '#f2ffe6'
         }
         
         for i, phase in enumerate(curriculum_phases):
             plt.axvspan(i, i+1, facecolor=phase_colors.get(phase, 'white'), alpha=0.3)
     
-    # Plot specialization score
     plt.plot(chunks, specialization_scores, 'b-', linewidth=2)
     
-    # Add horizontal lines for reference
     plt.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
     plt.axhline(y=0.8, color='green', linestyle='--', alpha=0.5)
     plt.text(chunks[-1] * 0.02, 0.52, 'Moderate Specialization', fontsize=9, color='gray')
     plt.text(chunks[-1] * 0.02, 0.82, 'Good Specialization', fontsize=9, color='green')
     
-    # Show final score
     final_score = specialization_scores[-1]
     plt.text(chunks[-1] * 0.8, final_score, f'Final: {final_score:.3f}', 
              fontsize=10, color='blue', bbox=dict(facecolor='white', alpha=0.7))
@@ -241,7 +226,6 @@ def plot_specialization_score(specialization_scores, curriculum_phases=None, sav
 def save_all_visualizations(result_data, experiment_name):
     results_dir = create_results_directory(experiment_name)
     
-    # Process membrane potentials - only create combined plot
     all_vm_traces = result_data.get('all_vm_traces', [])
     
     if all_vm_traces:

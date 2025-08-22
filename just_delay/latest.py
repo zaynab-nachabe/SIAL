@@ -359,16 +359,16 @@ def create_populations(input_spikes, weights, NEURON_PARAMS, init_delay_range=(3
 def init_delay_learning(
     num_presentations=5,
     pattern_interval=30,
-    B_plus = 0.5,          # Increased for stronger learning
-    B_minus = 0.45,        # Increased for stronger learning 
+    B_plus = 0.5,
+    B_minus = 0.45, 
     sigma_plus = 10.0,
     sigma_minus = 10.0,
     c_threshold = 0.5,
     modulation_const = 1.5,
     init_delay_range= (1.0, 15.0),
     weights = (0.04, 0.04),
-    inh_weight = 1.2,       # Strong lateral inhibition
-    inh_delay = 0.5,          # Fast inhibition
+    inh_weight = 1.2, 
+    inh_delay = 0.5,
     timestep=0.01,
     seed=None
 ):
