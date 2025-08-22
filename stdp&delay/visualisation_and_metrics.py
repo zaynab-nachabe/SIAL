@@ -90,7 +90,7 @@ def plot_delay_evolution(delay_history, save_path=None, chunk_modes=None):
         for i, mode in enumerate(chunk_modes):
             if mode == "TRAINING":
                 ax.axvspan(i-0.4, i+0.4, color='lightblue', alpha=0.2)
-            else:  # TESTING
+            else:
                 ax.axvspan(i-0.4, i+0.4, color='lightgray', alpha=0.2)
     
     # Plot delay evolution with transparency

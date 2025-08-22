@@ -706,10 +706,7 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
         ('input_1', 'output_0'): initial_weights[1] * (1 + np.random.uniform(-weight_jitter, weight_jitter)),
         ('input_1', 'output_1'): initial_weights[1] * (1 + np.random.uniform(-weight_jitter, weight_jitter))
     }
-    
-    # Initialize accuracy tracking
-    accuracy_history = []
-    best_accuracy = 0.0
+       
     stable_count = 0
     
     for key in delay_history:
@@ -846,61 +843,11 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
         for key in weight_history:
             weight_history[key].append(weights[key])
         
-        # Calculate response differential (how much more a neuron responds to its preferred pattern)
-        if neuron0_prefers_pattern0 and neuron1_prefers_pattern1:
-            # Pattern 0->0, 1->1 specialization
-            # Calculate based on actual response rates not just differential
-            # This ensures that high absolute response rates contribute to higher accuracy
-            positive_responses = (pattern_responses['output_0']['pattern_0'] + pattern_responses['output_1']['pattern_1'])/2
-            negative_avoidance = (1.0 - pattern_responses['output_0']['pattern_1'] + 1.0 - pattern_responses['output_1']['pattern_0'])/2
-            current_accuracy = (positive_responses + negative_avoidance)/2
-            
-            # Bonus for perfect classification (1.0 response to preferred, 0.0 to non-preferred)
-            if pattern_responses['output_0']['pattern_0'] > 0.9 and pattern_responses['output_0']['pattern_1'] < 0.1 and \
-               pattern_responses['output_1']['pattern_1'] > 0.9 and pattern_responses['output_1']['pattern_0'] < 0.1:
-                current_accuracy = min(1.0, current_accuracy + 0.3)
-        elif neuron0_prefers_pattern1 and neuron1_prefers_pattern0:
-            # Pattern 1->0, 0->1 specialization
-            # Calculate based on actual response rates not just differential
-            positive_responses = (pattern_responses['output_0']['pattern_1'] + pattern_responses['output_1']['pattern_0'])/2
-            negative_avoidance = (1.0 - pattern_responses['output_0']['pattern_0'] + 1.0 - pattern_responses['output_1']['pattern_1'])/2
-            current_accuracy = (positive_responses + negative_avoidance)/2
-            
-            # Bonus for perfect classification (1.0 response to preferred, 0.0 to non-preferred)
-            if pattern_responses['output_0']['pattern_1'] > 0.9 and pattern_responses['output_0']['pattern_0'] < 0.1 and \
-               pattern_responses['output_1']['pattern_0'] > 0.9 and pattern_responses['output_1']['pattern_1'] < 0.1:
-                current_accuracy = min(1.0, current_accuracy + 0.3)
-        else:
-            # Single neuron specialization - use the stronger specialization
-            # Also consider actual response rates for single neuron specialization
-            spec0_pattern0_accuracy = (pattern_responses['output_0']['pattern_0'] + (1.0 - pattern_responses['output_0']['pattern_1']))/2
-            spec1_pattern1_accuracy = (pattern_responses['output_1']['pattern_1'] + (1.0 - pattern_responses['output_1']['pattern_0']))/2
-            spec0_pattern1_accuracy = (pattern_responses['output_0']['pattern_1'] + (1.0 - pattern_responses['output_0']['pattern_0']))/2
-            spec1_pattern0_accuracy = (pattern_responses['output_1']['pattern_0'] + (1.0 - pattern_responses['output_1']['pattern_1']))/2
-            
-            current_accuracy = max(
-                spec0_pattern0_accuracy,
-                spec1_pattern1_accuracy,
-                spec0_pattern1_accuracy,
-                spec1_pattern0_accuracy
-            ) * 0.9  # Less penalty for single neuron specialization
-        
-        print(f"  Current accuracy: {current_accuracy:.2f}")
         print(f"  Response rates:")
         print(f"  Output0 to Pattern0: {pattern_responses['output_0']['pattern_0']:.2f}")
         print(f"  Output0 to Pattern1: {pattern_responses['output_0']['pattern_1']:.2f}")
         print(f"  Output1 to Pattern0: {pattern_responses['output_1']['pattern_0']:.2f}")
         print(f"  Output1 to Pattern1: {pattern_responses['output_1']['pattern_1']:.2f}")
-        
-        # Track accuracy history
-        accuracy_history.append(current_accuracy)
-        
-        # Update best accuracy
-        if current_accuracy > best_accuracy:
-            best_accuracy = current_accuracy
-            stable_count = 0
-        else:
-            stable_count += 1
 
         all_pairs = find_spike_pairs(
             populations, 
@@ -1036,37 +983,17 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
         'pattern_responses': pattern_responses,
         'response_history': response_history,
         'final_delays': current_delays,
-        'accuracy_history': accuracy_history,
         'stable_count': stable_count,
         'best_accuracy': best_accuracy
     }
 
 if __name__ == "__main__":
-    # Update main parameters to optimize combined learning
-    config = init_delay_learning(
-        # Increase number of presentations per pattern for better learning
-        num_presentations=10,
-        # Stronger STDP learning rates
-        B_plus=0.35,  
-        B_minus=0.30,
-        # Stronger competitive modulation
-        modulation_const=0.20,
-        # Stronger initial weights for better responsiveness
-        weights=(0.25, 0.25),
-        # Balanced inhibition for better competition
-        inh_weight=1.2,
-        # Faster inhibition for quicker competition
-        inh_delay=0.8,
-        # Random seed for reproducibility
-        seed=42
-    )
+    config = init_delay_learning()
     
-    # Run simulation with more chunks for better learning
     results = run_chunked_simulation(
         config, 
         num_chunks=100,
         patterns_per_chunk=10
     )
     
-    # Save the visualization with an identifiable name
     save_all_visualizations(results, "stdp_and_delay")

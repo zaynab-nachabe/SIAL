@@ -7,7 +7,7 @@ def plot_combined_membrane_potentials(vm_traces, v_thresh=-52.5, save_path=None)
         print("Warning: No membrane potential data available for plotting")
         return None, None
     
-    neuron_colors = ['#1f77b4', '#ff7f0e']  # Blue for output 0, orange for output 1
+    neuron_colors = ['#1f77b4', '#ff7f0e']
     
     fig, ax = plt.subplots(figsize=(14, 8))
     
