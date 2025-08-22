@@ -822,5 +822,5 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
 if __name__ == "__main__":
     config = init_delay_learning()
     results = run_chunked_simulation(config, num_chunks=40, patterns_per_chunk=10)
-    save_all_visualizations(results, "training_phase")
+    save_all_visualizations(results, "just_delay")
     

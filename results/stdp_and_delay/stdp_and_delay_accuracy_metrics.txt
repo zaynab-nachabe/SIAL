@@ -1,0 +1,13 @@
+Overall Accuracy: 0.4950
+Final Accuracy (Last 10): 0.5000
+Recent Accuracy (Last 5): 0.2500
+
+Specialization:
+  pattern_0 → output_0
+  pattern_1 → output_1
+
+Final Response Rates (Last 10 chunks):
+  output_0 → pattern_0: 0.5000
+  output_0 → pattern_1: 0.5000
+  output_1 → pattern_0: 0.0000
+  output_1 → pattern_1: 0.0000

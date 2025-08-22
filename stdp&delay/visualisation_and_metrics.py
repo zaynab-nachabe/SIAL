@@ -177,20 +177,30 @@ def plot_delay_evolution(delay_history, save_path=None):
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    ax.axhspan(7.0, 9.0, color='lightgreen', alpha=0.2, label='Target coincident zone')
-    ax.axhspan(0.1, 1.0, color='lightyellow', alpha=0.2, label='Target non-coincident zone')
+    ax.axhspan(6.0, 9.0, color='lightgreen', alpha=0.2, label='Target delayed zone')
+    ax.axhspan(0.1, 2.0, color='lightyellow', alpha=0.2, label='Target immediate zone')
     
-    ax.plot(chunks, delay_history[('input_0', 'output_0')], 'b-o', label='Input 0 → Output 0')
-    ax.plot(chunks, delay_history[('input_0', 'output_1')], 'b--o', label='Input 0 → Output 1')
-    ax.plot(chunks, delay_history[('input_1', 'output_0')], 'r-o', label='Input 1 → Output 0')
-    ax.plot(chunks, delay_history[('input_1', 'output_1')], 'r--o', label='Input 1 → Output 1')
+    # Extract just the delay values if they are stored as tuples
+    plot_data = {}
+    for conn, delays in delay_history.items():
+        plot_data[conn] = []
+        for d in delays:
+            if isinstance(d, tuple) and len(d) >= 3:
+                plot_data[conn].append(d[2])  # Extract delay value from tuple
+            else:
+                plot_data[conn].append(d)
+    
+    ax.plot(chunks, plot_data[('input_0', 'output_0')], 'b-o', label='Input 0 → Output 0')
+    ax.plot(chunks, plot_data[('input_0', 'output_1')], 'b--o', label='Input 0 → Output 1')
+    ax.plot(chunks, plot_data[('input_1', 'output_0')], 'r-o', label='Input 1 → Output 0')
+    ax.plot(chunks, plot_data[('input_1', 'output_1')], 'r--o', label='Input 1 → Output 1')
     
     if len(chunks) > 0:
-        final_delays = {k: v[-1] for k, v in delay_history.items()}
+        final_delays = {k: plot_data[k][-1] for k in plot_data}
         
         for conn, delay in final_delays.items():
             ax.plot(chunks[-1], delay, 'ko', markersize=8)
-            ax.text(chunks[-1] + 1, delay, f"{delay:.1f}ms", 
+            ax.text(chunks[-1] + 1, delay, f"{delay:.3f}ms", 
                    fontsize=9, ha='left', va='center', bbox=dict(facecolor='white', alpha=0.7))
     
     ax.set_xlabel('Training Chunk')
@@ -198,18 +208,63 @@ def plot_delay_evolution(delay_history, save_path=None):
     ax.set_title('Synaptic Delay Evolution')
     ax.grid(True, alpha=0.3)
     ax.legend(loc='upper right')
+    return fig, ax
+
+
+
+def plot_weight_evolution(weight_history, save_path=None):
+    """
+    Plots the evolution of synaptic weights over training chunks.
+    
+    Args:
+        weight_history (dict): Dictionary with connection tuples as keys and lists of weight values as values
+        save_path (str, optional): Path to save the figure. Defaults to None.
+    
+    Returns:
+        tuple: Figure and axes objects
+    """
+    if not weight_history:
+        print("Warning: No weight history data available")
+        return None, None
+    
+    chunks = list(range(len(next(iter(weight_history.values())))))
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Extract just the weight values if they are stored as tuples
+    plot_data = {}
+    for conn, weights in weight_history.items():
+        plot_data[conn] = []
+        for w in weights:
+            if isinstance(w, tuple) and len(w) >= 1:
+                plot_data[conn].append(w[0])  # Extract weight value from tuple
+            else:
+                plot_data[conn].append(w)
+    
+    ax.plot(chunks, plot_data[('input_0', 'output_0')], 'b-o', label='Input 0 → Output 0')
+    ax.plot(chunks, plot_data[('input_0', 'output_1')], 'b--o', label='Input 0 → Output 1')
+    ax.plot(chunks, plot_data[('input_1', 'output_0')], 'r-o', label='Input 1 → Output 0')
+    ax.plot(chunks, plot_data[('input_1', 'output_1')], 'r--o', label='Input 1 → Output 1')
     
     if len(chunks) > 0:
-        ax.text(chunks[-1] * 0.05, 8.0, 'Target coincident zone', 
-               fontsize=8, ha='left', va='center', bbox=dict(facecolor='white', alpha=0.7))
-        ax.text(chunks[-1] * 0.05, 0.5, 'Target non-coincident zone', 
-               fontsize=8, ha='left', va='center', bbox=dict(facecolor='white', alpha=0.7))
+        final_weights = {k: plot_data[k][-1] for k in plot_data}
+        
+        for conn, weight in final_weights.items():
+            ax.plot(chunks[-1], weight, 'ko', markersize=8)
+            ax.text(chunks[-1] + 1, weight, f"{weight:.3f}", 
+                   fontsize=9, ha='left', va='center', bbox=dict(facecolor='white', alpha=0.7))
+    
+    ax.set_xlabel('Training Chunk')
+    ax.set_ylabel('Weight Strength')
+    ax.set_title('Synaptic Weight Evolution (STDP)')
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc='upper right')
     
     plt.tight_layout()
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"Saved delay evolution plot to {save_path}")
+        print(f"Saved weight evolution plot to {save_path}")
     
     return fig, ax
 
@@ -671,6 +726,11 @@ def save_all_visualizations(result_data, experiment_name, final_window_size=10):
     # Save all visualizations
     delay_path = os.path.join(results_dir, f"{experiment_name}_delays.png")
     plot_delay_evolution(result_data.get('delay_history', {}), save_path=delay_path)
+    
+    # Add weight evolution plot
+    if 'weight_history' in result_data and result_data['weight_history']:
+        weight_path = os.path.join(results_dir, f"{experiment_name}_weights.png")
+        plot_weight_evolution(result_data.get('weight_history', {}), save_path=weight_path)
     
     resp_evol_path = os.path.join(results_dir, f"{experiment_name}_response_evolution.png")
     plot_pattern_responses(response_history, save_path=resp_evol_path)

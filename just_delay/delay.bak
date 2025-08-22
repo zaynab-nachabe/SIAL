@@ -1,0 +1,1103 @@
+import pyNN.nest as sim
+import numpy as np
+import random
+import os
+from visualisation_and_metrics import save_all_visualizations
+# Delay Learning Experiment (not stdp)
+
+def get_neuron_params():
+    NEURON_PARAMS = {
+        'tau_m': 15,          # [between 10 and 30]
+        'tau_refrac': 2.0,    # [1-3ms]
+        'v_reset': -70.0,     # [near resting potential]
+        'v_rest': -65.0,      # [-60 to -70mV]
+        'v_thresh': -52.5,    # [-55 to -50mV]
+        'cm': 0.25,
+        'tau_syn_E': 5.0,     # [AMPA receptors ~5ms]
+        'tau_syn_I': 10.0,    # [GABA receptors ~10ms]
+        'e_rev_E': 0.0,     
+        'e_rev_I': -80.0   
+    }
+    return NEURON_PARAMS
+
+def get_input_patterns():
+    base_patterns = {
+        0: {'input0': 4.0, 'input1': 12.0},
+        1: {'input1': 4.0, 'input0': 12.0},
+        #2: {'input0': 5.0, 'input1': 5.0}
+    }
+    return base_patterns
+
+def generate_dataset(num_presentations=5, pattern_interval=30, specific_pattern=None):
+    base_patterns = get_input_patterns()
+    
+    pattern_sequence = []
+    if specific_pattern is not None:
+        # If a specific pattern is requested, use only that
+        pattern_sequence = [specific_pattern] * num_presentations
+    else:
+        # Create a balanced set of patterns with equal numbers of each
+        for _ in range(num_presentations // 2):
+            pattern_sequence.append(0)
+            pattern_sequence.append(1)
+        
+        if num_presentations % 2 == 1:
+            pattern_sequence.append(random.choice([0, 1]))
+        
+        random.shuffle(pattern_sequence)
+    
+    input0_spikes = []
+    input1_spikes = []
+    pattern_start_times = []
+    pattern_labels = []
+    
+    current_time = 0.0
+    
+    for pattern_id in pattern_sequence:
+        pattern = base_patterns[pattern_id]
+        
+        pattern_start_times.append(current_time)
+        pattern_labels.append(pattern_id)
+        
+        if 'input0' in pattern:
+            input0_spikes.append(current_time + pattern['input0'])
+        
+        if 'input1' in pattern:
+            input1_spikes.append(current_time + pattern['input1'])
+        
+        current_time += pattern_interval
+    
+    dataset = {
+        'input_spikes': [input0_spikes, input1_spikes],
+        'pattern_start_times': pattern_start_times,
+        'pattern_labels': pattern_labels
+    }
+    
+    print(f"Generated dataset with {len(pattern_sequence)} patterns. Pattern distribution: {pattern_sequence.count(0)} pattern 0, {pattern_sequence.count(1)} pattern 1")
+    
+    return dataset
+
+
+def find_spike_pairs(populations, output0_spikes, output1_spikes, current_delays, window=10.0):
+    "find the pairs of post-synpatic and pre-synaptic neurons used later in apply_delay_learning"
+    input0_spikes = populations['input_0'].get_data().segments[0].spiketrains[0]
+    input1_spikes = populations['input_1'].get_data().segments[0].spiketrains[0]
+    
+    input0_spikes = [float(t) for t in input0_spikes]
+    input1_spikes = [float(t) for t in input1_spikes]
+    output0_spikes = [float(t) for t in output0_spikes]
+    output1_spikes = [float(t) for t in output1_spikes]
+    
+    print("Current connection delays:")
+    for conn in [('input_0', 'output_0'), ('input_0', 'output_1'), ('input_1', 'output_0'), ('input_1', 'output_1')]:
+        val = current_delays[conn]
+        if isinstance(val, tuple):
+            val = val[2]
+        print(f"  {conn[0]} → {conn[1]}: {val:.3f} ms")
+    
+    all_pairs = {
+        ('input_0', 'output_0'): [],
+        ('input_0', 'output_1'): [],
+        ('input_1', 'output_0'): [],
+        ('input_1', 'output_1'): []
+    }
+    
+    if len(output0_spikes) == 0 and len(output1_spikes) == 0:
+        return all_pairs
+    
+    delay_00 = current_delays[('input_0', 'output_0')]
+    if isinstance(delay_00, tuple) or isinstance(delay_00, list):
+        delay_00 = float(delay_00[2])
+    else:
+        delay_00 = float(delay_00)
+        
+    delay_01 = current_delays[('input_0', 'output_1')]
+    if isinstance(delay_01, tuple) or isinstance(delay_01, list):
+        delay_01 = float(delay_01[2])
+    else:
+        delay_01 = float(delay_01)
+        
+    delay_10 = current_delays[('input_1', 'output_0')]
+    if isinstance(delay_10, tuple) or isinstance(delay_10, list):
+        delay_10 = float(delay_10[2])
+    else:
+        delay_10 = float(delay_10)
+        
+    delay_11 = current_delays[('input_1', 'output_1')]
+    if isinstance(delay_11, tuple) or isinstance(delay_11, list):
+        delay_11 = float(delay_11[2])
+    else:
+        delay_11 = float(delay_11)
+    
+    for pre_time in input0_spikes:
+        arrival_time = pre_time + delay_00
+        
+        if output0_spikes:
+            valid_posts = [t for t in output0_spikes if abs(t - arrival_time) <= window]
+            
+            if valid_posts:
+                closest_post = min(valid_posts, key=lambda t: abs(t - arrival_time))
+                all_pairs[('input_0', 'output_0')].append((pre_time, closest_post))
+    
+    for pre_time in input0_spikes:
+        arrival_time = pre_time + delay_01
+        
+        if output1_spikes:
+            valid_posts = [t for t in output1_spikes if abs(t - arrival_time) <= window]
+            
+            if valid_posts:
+                closest_post = min(valid_posts, key=lambda t: abs(t - arrival_time))
+                all_pairs[('input_0', 'output_1')].append((pre_time, closest_post))
+    
+    for pre_time in input1_spikes:
+        arrival_time = pre_time + delay_10
+        
+        if output0_spikes:
+            valid_posts = [t for t in output0_spikes if abs(t - arrival_time) <= window]
+            
+            if valid_posts:
+                closest_post = min(valid_posts, key=lambda t: abs(t - arrival_time))
+                all_pairs[('input_1', 'output_0')].append((pre_time, closest_post))
+    
+    for pre_time in input1_spikes:
+        arrival_time = pre_time + delay_11
+        
+        if output1_spikes:
+            valid_posts = [t for t in output1_spikes if abs(t - arrival_time) <= window]
+            
+            if valid_posts:
+                closest_post = min(valid_posts, key=lambda t: abs(t - arrival_time))
+                all_pairs[('input_1', 'output_1')].append((pre_time, closest_post))
+    
+    return all_pairs
+
+def delay_learning_rule(pre_spike_time, post_spike_time, current_delay, 
+                        B_plus=0.1, B_minus=0.1, sigma_plus=10.0, sigma_minus=10.0, 
+                        c_threshold=0.5, modulation_cost=0.01):
+    
+    current_delays = np.array(current_delays, dtype=float)
+    if np.any(current_delays < c_threshold):
+        new_delays = current_delays + modulation_cost
+        return new_delays
+    
+    new_delays = []
+
+    for i in range(len(current_delays)):
+        delta_t = post_spike_time - pre_spike_time - current_delays[i]
+
+        #apply piecewise function G
+        if delta_t >= 0:  #if post fires after pre, I decrease the delay
+            delta_delay = -B_minus * np.exp(-delta_t / sigma_minus)
+        else:  #if post fires before pre, I increase the delay
+            delta_delay = B_plus * np.exp(delta_t / sigma_plus)
+
+        new_delays.append(current_delays[i] + delta_delay)
+
+    new_delays = np.array(new_delays) + modulation_cost
+
+    return new_delays
+
+
+
+def delay_homeostasis(current_delays, R_target, R_observed, learning_rate_d=0.8, pattern_responses=None):
+    new_delays = current_delays.copy()
+    
+    def update_delay(connection, adjustment):
+        if isinstance(current_delays[connection], tuple):
+            delay_value = current_delays[connection][2]
+            new_delay = delay_value - adjustment
+            new_delay = max(0.1, min(20.0, new_delay))
+            return (current_delays[connection][0], current_delays[connection][1], new_delay)
+        else:
+            new_delay = current_delays[connection] - adjustment
+            return max(0.1, min(20.0, new_delay))
+    
+    # Calculate overall homeostasis factors - this is purely based on firing rates
+    # which is an unsupervised mechanism
+    K_output0 = (R_target - R_observed['output_0']) / max(0.1, R_target)
+    K_output1 = (R_target - R_observed['output_1']) / max(0.1, R_target)
+    
+    # Standard homeostasis: Each neuron tries to maintain a target firing rate
+    # This is unsupervised as it only depends on the neuron's own activity
+    for connection in current_delays:
+        output_index = 0 if connection[1] == 'output_0' else 1
+        K_factor = K_output0 if output_index == 0 else K_output1
+        
+        # Apply homeostatic adjustment
+        new_delays[connection] = update_delay(connection, learning_rate_d * K_factor * 0.8)
+    
+    return new_delays
+
+def analyze_pattern_responses(output0_spikes, output1_spikes, pattern_start_times, pattern_labels, window=20):
+    pattern0_responses = [0, 0] 
+    pattern1_responses = [0, 0]
+    
+    output0_spikes = [float(t) for t in output0_spikes]
+    output1_spikes = [float(t) for t in output1_spikes]
+    
+    for i, (time, pattern) in enumerate(zip(pattern_start_times, pattern_labels)):
+        output0_responded = any((time <= t <= time + window) for t in output0_spikes)
+        output1_responded = any((time <= t <= time + window) for t in output1_spikes)
+        
+        if pattern == 0:
+            pattern0_responses[0] += 1 if output0_responded else 0
+            pattern0_responses[1] += 1 if output1_responded else 0
+        elif pattern == 1:
+            pattern1_responses[0] += 1 if output0_responded else 0
+            pattern1_responses[1] += 1 if output1_responded else 0
+    
+    pattern0_count = sum(1 for p in pattern_labels if p == 0)
+    pattern1_count = sum(1 for p in pattern_labels if p == 1)
+    
+    output0_pattern0_rate = pattern0_responses[0] / max(1, pattern0_count)
+    output0_pattern1_rate = pattern1_responses[0] / max(1, pattern1_count)
+    output1_pattern0_rate = pattern0_responses[1] / max(1, pattern0_count)
+    output1_pattern1_rate = pattern1_responses[1] / max(1, pattern1_count)
+    
+    return {
+        'output_0': {
+            'pattern_0': output0_pattern0_rate,
+            'pattern_1': output0_pattern1_rate
+        },
+        'output_1': {
+            'pattern_0': output1_pattern0_rate,
+            'pattern_1': output1_pattern1_rate
+        }
+    }
+
+def create_populations(input_spikes, weights, NEURON_PARAMS, init_delay_range=(3.0, 7.0), 
+                      init_delays=None, inh_weight=-15.0, inh_delay=0.5):
+    input_pop_0 = sim.Population(
+        1, sim.SpikeSourceArray(spike_times=input_spikes[0]), label="In0"
+    )
+    input_pop_1 = sim.Population(
+        1, sim.SpikeSourceArray(spike_times=input_spikes[1]), label="In1"
+    )
+    input_pop_0.record("spikes")
+    input_pop_1.record("spikes")
+
+    output_pop_0 = sim.Population(1, sim.IF_cond_exp(**NEURON_PARAMS), label="Out0")
+    output_pop_1 = sim.Population(1, sim.IF_cond_exp(**NEURON_PARAMS), label="Out1")
+
+    output_pop_0.initialize(v=NEURON_PARAMS['v_rest'])
+    output_pop_1.initialize(v=NEURON_PARAMS['v_rest'])
+
+    output_pop_0.record(("spikes", "v"))
+    output_pop_1.record(("spikes", "v"))
+
+    if init_delays is not None and isinstance(init_delays, dict):
+        d0_in0 = init_delays[('input_0', 'output_0')]
+        d0_in1 = init_delays[('input_0', 'output_1')]
+        d1_in0 = init_delays[('input_1', 'output_0')]
+        d1_in1 = init_delays[('input_1', 'output_1')]
+        
+        if isinstance(d0_in0, tuple):
+            d0_in0 = d0_in0[2]
+        if isinstance(d0_in1, tuple):
+            d0_in1 = d0_in1[2]
+        if isinstance(d1_in0, tuple):
+            d1_in0 = d1_in0[2]
+        if isinstance(d1_in1, tuple):
+            d1_in1 = d1_in1[2]
+    else:
+        d0_in0 = np.random.uniform(*init_delay_range)
+        d0_in1 = np.random.uniform(*init_delay_range)
+        d1_in0 = np.random.uniform(*init_delay_range)
+        d1_in1 = np.random.uniform(*init_delay_range)
+
+    conn_in0_out0 = sim.Projection(
+        input_pop_0, output_pop_0, sim.AllToAllConnector(),
+        synapse_type=sim.StaticSynapse(weight=weights[0], delay=d0_in0),
+        receptor_type="excitatory"
+    )
+
+    conn_in0_out1 = sim.Projection(
+        input_pop_0, output_pop_1, sim.AllToAllConnector(),
+        synapse_type=sim.StaticSynapse(weight=weights[0], delay=d0_in1),
+        receptor_type="excitatory"
+    )
+
+    conn_in1_out0 = sim.Projection(
+        input_pop_1, output_pop_0, sim.AllToAllConnector(),
+        synapse_type=sim.StaticSynapse(weight=weights[1], delay=d1_in0),
+        receptor_type="excitatory"
+    )
+
+    conn_in1_out1 = sim.Projection(
+        input_pop_1, output_pop_1, sim.AllToAllConnector(),
+        synapse_type=sim.StaticSynapse(weight=weights[1], delay=d1_in1),
+        receptor_type="excitatory"
+    )
+
+    # For inhibitory connections, use the absolute value since inhibitory weights need to be positive in NEST
+    # The inhibitory effect comes from the receptor_type="inhibitory"
+    abs_inh_weight = abs(inh_weight)
+    
+    conn_out0_out1 = sim.Projection(
+        output_pop_0, output_pop_1, sim.AllToAllConnector(),
+        synapse_type=sim.StaticSynapse(weight=abs_inh_weight, delay=inh_delay),
+        receptor_type="inhibitory"
+    )
+
+    conn_out1_out0 = sim.Projection(
+        output_pop_1, output_pop_0, sim.AllToAllConnector(),
+        synapse_type=sim.StaticSynapse(weight=abs_inh_weight, delay=inh_delay),
+        receptor_type="inhibitory"
+    )
+
+    return {
+        "input_0": input_pop_0,
+        "input_1": input_pop_1,
+        "output_0": output_pop_0,
+        "output_1": output_pop_1,
+        "projections": {
+            ("input_0", "output_0"): conn_in0_out0,
+            ("input_0", "output_1"): conn_in0_out1,
+            ("input_1", "output_0"): conn_in1_out0,
+            ("input_1", "output_1"): conn_in1_out1,
+        }
+    }
+
+def init_delay_learning(
+    num_presentations=5,
+    pattern_interval=30,
+    B_plus = 0.5,          # Increased for stronger learning
+    B_minus = 0.45,        # Increased for stronger learning 
+    sigma_plus = 10.0,
+    sigma_minus = 10.0,
+    c_threshold = 0.5,
+    modulation_const = 2.0,   # Increased even further for stronger pattern-based competition
+    init_delay_range= (1.0, 15.0),
+    weights = (0.04, 0.04),   # Same weights as in specialized_neurons.py
+    inh_weight = -15.0,       # Strong lateral inhibition
+    inh_delay = 0.5,          # Fast inhibition
+    timestep=0.01,
+    seed=None
+):
+    if seed is not None:
+        np.random.seed(seed)
+        random.seed(seed)
+    
+    sim.setup(timestep=timestep)
+
+    dataset = generate_dataset(
+        num_presentations=num_presentations,
+        pattern_interval=pattern_interval,
+        specific_pattern=None
+    )
+
+    config = {
+        "dataset": dataset,
+        "num_presentations":num_presentations,
+        "pattern_interval": pattern_interval,
+        "B_plus": B_plus,
+        "B_minus": B_minus,
+        "sigma_plus": sigma_plus,
+        "sigma_minus": sigma_minus,
+        "c_threshold": c_threshold,
+        "modulation_const": modulation_const,
+        "init_delay_range": init_delay_range,
+        "weights": weights,
+        "inh_weight": inh_weight,
+        "inh_delay": inh_delay,
+        "timestep": timestep,
+        "seed":seed,
+        "NEURON_PARAMS": get_neuron_params()
+    }
+
+    return config
+
+def update_network_delays(populations, new_delays):
+    for connection, delay in new_delays.items():
+        input_pop, output_pop = connection
+        projection = populations['projections'][connection]
+        
+        if isinstance(delay, tuple):
+            actual_delay = delay[2]
+        else:
+            actual_delay = delay
+        
+        projection.set(delay=actual_delay)
+    
+    return populations
+
+def apply_delay_learning(current_delays, all_pairs, B_plus, B_minus, 
+                         sigma_plus, sigma_minus, c_threshold, modulation_const,
+                         current_accuracy=0.0, pattern_responses=None):
+    new_delays = current_delays.copy()
+    
+    # Process each connection with STDP
+    for connection, pairs in all_pairs.items():
+        # Skip empty connections
+        if len(pairs) == 0:
+            continue
+        
+        # Extract current delay value
+        if isinstance(current_delays[connection], tuple):
+            current_delay = current_delays[connection][2]
+        else:
+            current_delay = current_delays[connection]
+        
+        # Skip STDP for delays below threshold
+        if current_delay < c_threshold:
+            continue
+        
+        # Calculate STDP changes
+        delta_delays = []
+        for pre_time, post_time in pairs:
+            delta_t = post_time - (pre_time + current_delay)
+            
+            # Enhanced STDP function that more strongly rewards near-coincident timing
+            # We want to minimize absolute time difference - reward coincident arrivals
+            if abs(delta_t) < 2.0:  # If inputs are nearly coincident (within 2ms)
+                # Stronger reward for coincident timing
+                coincidence_factor = 2.0  # Increased boost factor for coincident arrivals
+                if delta_t >= 0:
+                    delta_delay = -B_minus * coincidence_factor * np.exp(-delta_t / sigma_minus)
+                else:
+                    delta_delay = B_plus * coincidence_factor * np.exp(delta_t / sigma_plus)
+            elif abs(delta_t) < 5.0:  # Moderately close timing
+                coincidence_factor = 1.2
+                if delta_t >= 0:
+                    delta_delay = -B_minus * coincidence_factor * np.exp(-delta_t / sigma_minus)
+                else:
+                    delta_delay = B_plus * coincidence_factor * np.exp(delta_t / sigma_plus)
+            else:
+                # Regular STDP for non-coincident timing
+                if delta_t >= 0:
+                    delta_delay = -B_minus * np.exp(-delta_t / sigma_minus)
+                else:
+                    delta_delay = B_plus * np.exp(delta_t / sigma_plus)
+            
+            delta_delays.append(delta_delay)
+        
+        # Apply average STDP change if we have any
+        if delta_delays:
+            avg_delta = np.mean(delta_delays)
+            
+            # Apply STDP
+            new_delay = current_delay + avg_delta
+            
+            # Store the updated delay
+            if isinstance(current_delays[connection], tuple):
+                new_tuple = (current_delays[connection][0], current_delays[connection][1], new_delay)
+                new_delays[connection] = new_tuple
+            else:
+                new_delays[connection] = new_delay
+    
+    # Apply competitive modulation to promote specialization
+    if modulation_const > 0:
+        # Calculate activity levels and timing precision for each connection
+        activity_levels = {}
+        timing_precision = {}
+        
+        for connection, pairs in all_pairs.items():
+            activity_levels[connection] = len(pairs)
+            
+            if len(pairs) > 0:
+                if isinstance(current_delays[connection], tuple):
+                    current_delay = current_delays[connection][2]
+                else:
+                    current_delay = current_delays[connection]
+                
+                timing_diffs = []
+                for pre_time, post_time in pairs:
+                    delta_t = post_time - (pre_time + current_delay)
+                    timing_diffs.append(abs(delta_t))
+                
+                # Lower variance means better timing precision
+                if timing_diffs:
+                    precision = 1.0 / (1.0 + np.mean(timing_diffs))
+                    timing_precision[connection] = precision
+                else:
+                    timing_precision[connection] = 0.0
+            else:
+                timing_precision[connection] = 0.0
+        
+        # Combine activity and precision for fitness score
+        fitness_scores = {}
+        if sum(activity_levels.values()) > 0:
+            # Normalize activity levels
+            total_activity = max(1, sum(activity_levels.values()))
+            for connection in activity_levels:
+                norm_activity = activity_levels[connection] / total_activity
+                norm_precision = timing_precision.get(connection, 0.0)
+                # Weighted combination favoring connections that are both active and precise
+                fitness_scores[connection] = (0.7 * norm_activity) + (0.3 * norm_precision)
+            
+            # Sort connections by fitness score
+            sorted_connections = sorted(
+                fitness_scores.items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )
+            
+            # Group connections by input and output neurons
+            input0_conns = [conn for conn in sorted_connections if conn[0][0] == "input_0"]
+            input1_conns = [conn for conn in sorted_connections if conn[0][0] == "input_1"]
+            output0_conns = [conn for conn in sorted_connections if conn[0][1] == "output_0"]
+            output1_conns = [conn for conn in sorted_connections if conn[0][1] == "output_1"]
+            
+            # Pattern-aware delay modulation:
+            # 1. If Output0 seems to prefer Pattern0, push its delays toward Pattern0 specialist configuration
+            # 2. If Output1 seems to prefer Pattern1, push its delays toward Pattern1 specialist configuration
+            
+            # Calculate response differences (measure of specialization)
+            output0_diff = abs(output0_pattern0 - output0_pattern1)
+            output1_diff = abs(output1_pattern0 - output1_pattern1)
+            
+            # Only apply targeted modulation if some specialization is emerging
+            if output0_diff > 0.1 or output1_diff > 0.1:
+                # For Output0
+                # Target delays for Pattern0 specialist: Input0->Output0 ~8ms, Input1->Output0 ~0.1ms
+                # Target delays for Pattern1 specialist: Input0->Output0 ~0.1ms, Input1->Output0 ~8ms
+                
+                # Calculate specialization strength - how strongly to push toward the target
+                specialization_strength = min(1.0, max(output0_diff, 0.2))
+                
+                if output0_prefers_pattern0:
+                    # Output0 prefers Pattern0, so push toward Pattern0 specialist configuration
+                    in0_out0_target = 8.0
+                    in1_out0_target = 1.0  # Slightly higher to avoid going too low
+                else:
+                    # Output0 seems to prefer Pattern1, so push toward Pattern1 specialist configuration
+                    in0_out0_target = 1.0
+                    in1_out0_target = 8.0
+                
+                # Adjust Input0->Output0 delay toward target (proportional to specialization strength)
+                current_delay = new_delays[('input_0', 'output_0')]
+                if isinstance(current_delay, tuple):
+                    current_val = current_delay[2]
+                    new_val = current_val + modulation_const * (in0_out0_target - current_val) * 0.2 * specialization_strength
+                    new_delays[('input_0', 'output_0')] = (current_delay[0], current_delay[1], new_val)
+                else:
+                    new_val = current_delay + modulation_const * (in0_out0_target - current_delay) * 0.2 * specialization_strength
+                    new_delays[('input_0', 'output_0')] = new_val
+                
+                # Adjust Input1->Output0 delay toward target
+                current_delay = new_delays[('input_1', 'output_0')]
+                if isinstance(current_delay, tuple):
+                    current_val = current_delay[2]
+                    new_val = current_val + modulation_const * (in1_out0_target - current_val) * 0.2 * specialization_strength
+                    new_delays[('input_1', 'output_0')] = (current_delay[0], current_delay[1], new_val)
+                else:
+                    new_val = current_delay + modulation_const * (in1_out0_target - current_delay) * 0.2 * specialization_strength
+                    new_delays[('input_1', 'output_0')] = new_val
+            
+                # For Output1
+                # Calculate specialization strength
+                specialization_strength = min(1.0, max(output1_diff, 0.2))
+                
+                if output1_prefers_pattern1:
+                    # Output1 prefers Pattern1, so push toward Pattern1 specialist configuration
+                    in0_out1_target = 1.0  # Slightly higher to avoid going too low
+                    in1_out1_target = 8.0
+                else:
+                    # Output1 seems to prefer Pattern0, so push toward Pattern0 specialist configuration
+                    in0_out1_target = 8.0
+                    in1_out1_target = 1.0
+                
+                # Adjust Input0->Output1 delay toward target
+                current_delay = new_delays[('input_0', 'output_1')]
+                if isinstance(current_delay, tuple):
+                    current_val = current_delay[2]
+                    new_val = current_val + modulation_const * (in0_out1_target - current_val) * 0.2 * specialization_strength
+                    new_delays[('input_0', 'output_1')] = (current_delay[0], current_delay[1], new_val)
+                else:
+                    new_val = current_delay + modulation_const * (in0_out1_target - current_delay) * 0.2 * specialization_strength
+                    new_delays[('input_0', 'output_1')] = new_val
+                
+                # Adjust Input1->Output1 delay toward target
+                current_delay = new_delays[('input_1', 'output_1')]
+                if isinstance(current_delay, tuple):
+                    current_val = current_delay[2]
+                    new_val = current_val + modulation_const * (in1_out1_target - current_val) * 0.2 * specialization_strength
+                    new_delays[('input_1', 'output_1')] = (current_delay[0], current_delay[1], new_val)
+                else:
+                    new_val = current_delay + modulation_const * (in1_out1_target - current_delay) * 0.2 * specialization_strength
+                    new_delays[('input_1', 'output_1')] = new_val
+            
+            # If specialization isn't strong enough yet, use standard competitive modulation
+            if output0_diff < 0.1 and output1_diff < 0.1:
+                print("  No clear specialization yet: using general competitive modulation")
+                # Strengthen best connection for each input, weaken others
+                for input_group in [input0_conns, input1_conns]:
+                    if len(input_group) > 0:
+                        best_conn = input_group[0][0]
+                        # Strengthen best connection - reduce delay for faster activation
+                        if isinstance(new_delays[best_conn], tuple):
+                            current_val = new_delays[best_conn][2]
+                            new_val = max(1.0, current_val - modulation_const * 3.0)  # Stronger effect
+                            new_delays[best_conn] = (new_delays[best_conn][0], new_delays[best_conn][1], new_val)
+                        else:
+                            new_delays[best_conn] = max(1.0, new_delays[best_conn] - modulation_const * 3.0)  # Stronger effect
+                        
+                        # Weaken other connections from same input - increase delay to slow down activation
+                        for conn_info in input_group[1:]:
+                            conn = conn_info[0]
+                            if isinstance(new_delays[conn], tuple):
+                                current_val = new_delays[conn][2]
+                                new_val = min(15.0, current_val + modulation_const * 4.0)  # Stronger effect
+                                new_delays[conn] = (new_delays[conn][0], new_delays[conn][1], new_val)
+                            else:
+                                new_delays[conn] = min(15.0, new_delays[conn] + modulation_const * 4.0)  # Stronger effect
+                
+                # Similarly for output neurons
+                for output_group in [output0_conns, output1_conns]:
+                    if len(output_group) > 0:
+                        best_conn = output_group[0][0]
+                        # Already strengthened above, so just weaken others
+                        for conn_info in output_group[1:]:
+                            conn = conn_info[0]
+                            if isinstance(new_delays[conn], tuple):
+                                current_val = new_delays[conn][2]
+                                new_val = min(15.0, current_val + modulation_const * 4.0)  # Stronger effect
+                                new_delays[conn] = (new_delays[conn][0], new_delays[conn][1], new_val)
+                            else:
+                                new_delays[conn] = min(15.0, new_delays[conn] + modulation_const * 4.0)  # Stronger effect
+    
+    # Add slight noise to avoid symmetry problems
+    delay_values = []
+    for connection in new_delays:
+        if isinstance(new_delays[connection], tuple):
+            delay_values.append(new_delays[connection][2])
+        else:
+            delay_values.append(new_delays[connection])
+    
+    # Calculate variance in delays
+    delay_variance = np.var(delay_values)
+    
+    # If variance is too low, add some noise to break symmetry
+    if delay_variance < 0.5:  # Delays too similar
+        for connection in new_delays:
+            if isinstance(new_delays[connection], tuple):
+                current_val = new_delays[connection][2]
+                # Add random noise of up to ±0.5ms
+                noise = np.random.uniform(-0.5, 0.5)
+                new_val = current_val + noise
+                new_delays[connection] = (new_delays[connection][0], new_delays[connection][1], new_val)
+            else:
+                current_val = new_delays[connection]
+                noise = np.random.uniform(-0.5, 0.5)
+                new_delays[connection] = current_val + noise
+    
+    # Apply general bounds to prevent extreme values
+    for connection in new_delays:
+        if isinstance(new_delays[connection], tuple):
+            delay_value = new_delays[connection][2]
+            delay_value = max(1.0, min(15.0, delay_value))
+            new_delays[connection] = (new_delays[connection][0], new_delays[connection][1], delay_value)
+        else:
+            new_delays[connection] = max(1.0, min(15.0, new_delays[connection]))
+    
+    return new_delays
+
+def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10, alternate_train_test=True):
+    """
+    Run a simulation with chunked pattern presentation.
+    If alternate_train_test is True, we alternate between training and testing chunks.
+    Training chunks update the delays, testing chunks only evaluate performance.
+    """
+    delay_history = {
+        ('input_0', 'output_0'): [],
+        ('input_0', 'output_1'): [],
+        ('input_1', 'output_0'): [],
+        ('input_1', 'output_1'): []
+    }
+    response_history = {
+        'output_0': {'pattern_0': [], 'pattern_1': []},
+        'output_1': {'pattern_0': [], 'pattern_1': []}
+    }
+    
+    # Track the chunk mode (train vs test) for visualization
+    chunk_modes = []
+    
+    # Start with completely random delays within the configured range
+    # This forces the network to truly learn without any prior knowledge
+    delay_min, delay_max = config['init_delay_range']
+    current_delays = {
+        ('input_0', 'output_0'): np.random.uniform(delay_min, delay_max),
+        ('input_0', 'output_1'): np.random.uniform(delay_min, delay_max),
+        ('input_1', 'output_0'): np.random.uniform(delay_min, delay_max),
+        ('input_1', 'output_1'): np.random.uniform(delay_min, delay_max)
+    }
+    
+    print("Initial random delays:")
+    for conn, delay in current_delays.items():
+        print(f"  {conn[0]} → {conn[1]}: {delay:.3f} ms")
+    
+    # Initialize accuracy tracking
+    accuracy_history = []
+    best_accuracy = 0.0
+    best_class_separation = 0.0
+    best_delays = current_delays.copy()  # Track the best performing delays
+    previous_accuracy = 0.0  # To detect performance decline
+    learning_frozen = False  # Flag to indicate if learning is frozen
+    stable_count = 0
+    
+    for key in delay_history:
+        delay_history[key].append(current_delays[key])
+    
+    final_populations = None
+    all_vm_traces = []
+    pattern_responses = None
+    
+    # Store pattern information for the last chunk
+    final_pattern_times = []
+    final_pattern_labels = []
+    
+    for chunk in range(num_chunks):
+        # Determine if this is a training or testing chunk
+        is_training_chunk = True
+        if alternate_train_test:
+            is_training_chunk = (chunk % 2 == 0)  # Even chunks are training, odd are testing
+        
+        chunk_type = "TRAINING" if is_training_chunk else "TESTING"
+        chunk_modes.append(chunk_type)
+        
+        print(f"\n=== Running {chunk_type} chunk {chunk+1}/{num_chunks} ===")
+
+        sim.setup(timestep=config['timestep'])
+
+        current_dataset = generate_dataset(
+            num_presentations=patterns_per_chunk,
+            pattern_interval=config['pattern_interval'],
+            specific_pattern=None  # Always use shuffled patterns
+        )
+        
+        # Keep pattern info from the last chunk for visualization
+        if chunk == num_chunks - 1:
+            final_pattern_times = current_dataset['pattern_start_times']
+            final_pattern_labels = current_dataset['pattern_labels']
+
+        populations = create_populations(
+            current_dataset['input_spikes'],
+            config['weights'],
+            config['NEURON_PARAMS'],
+            init_delay_range=config['init_delay_range'],
+            init_delays=current_delays,
+            inh_weight=config['inh_weight'],
+            inh_delay=config['inh_delay']
+        )
+
+        chunk_duration = patterns_per_chunk * config['pattern_interval']
+        sim.run(chunk_duration)
+
+        output0_spikes = populations['output_0'].get_data().segments[0].spiketrains[0]
+        output1_spikes = populations['output_1'].get_data().segments[0].spiketrains[0]
+
+        output0_data = populations.get('output_0', {}).get_data().segments[0]
+        output1_data = populations.get('output_1', {}).get_data().segments[0]
+        
+        vm_traces = [
+            output0_data.filter(name="v")[0],
+            output1_data.filter(name="v")[0]
+        ]
+        all_vm_traces.append(vm_traces)
+
+        pattern_responses = analyze_pattern_responses(
+            output0_spikes, 
+            output1_spikes, 
+            current_dataset['pattern_start_times'],
+            current_dataset['pattern_labels']
+        )
+        response_history['output_0']['pattern_0'].append(pattern_responses['output_0']['pattern_0'])
+        response_history['output_0']['pattern_1'].append(pattern_responses['output_0']['pattern_1'])
+        response_history['output_1']['pattern_0'].append(pattern_responses['output_1']['pattern_0'])
+        response_history['output_1']['pattern_1'].append(pattern_responses['output_1']['pattern_1'])
+
+        print(f"Pattern response rates:")
+        print(f"  Output 0: Pattern 0: {pattern_responses['output_0']['pattern_0']:.2f}, Pattern 1: {pattern_responses['output_0']['pattern_1']:.2f}")
+        print(f"  Output 1: Pattern 0: {pattern_responses['output_1']['pattern_0']:.2f}, Pattern 1: {pattern_responses['output_1']['pattern_1']:.2f}")
+        
+        # Print detailed delay information for monitoring unsupervised learning
+        print(f"  Current delays:")
+        print(f"  Input0->Output0: {current_delays[('input_0', 'output_0')]:.2f}ms")
+        print(f"  Input1->Output0: {current_delays[('input_1', 'output_0')]:.2f}ms")
+        print(f"  Input0->Output1: {current_delays[('input_0', 'output_1')]:.2f}ms")
+        print(f"  Input1->Output1: {current_delays[('input_1', 'output_1')]:.2f}ms")
+        
+        # Calculate current accuracy ONLY during testing chunks
+        current_accuracy = 0.0
+        
+        if not is_training_chunk:  # Only calculate accuracy during testing
+            # Determine which pattern each neuron responds to more (specialization)
+            neuron0_prefers_pattern0 = pattern_responses['output_0']['pattern_0'] > pattern_responses['output_0']['pattern_1']
+            neuron1_prefers_pattern1 = pattern_responses['output_1']['pattern_1'] > pattern_responses['output_1']['pattern_0']
+            
+            # Calculate class separation metrics
+            output0_separation = abs(pattern_responses['output_0']['pattern_0'] - pattern_responses['output_0']['pattern_1'])
+            output1_separation = abs(pattern_responses['output_1']['pattern_1'] - pattern_responses['output_1']['pattern_0'])
+            class_separation = (output0_separation + output1_separation) / 2
+            
+            print(f"  Class separation: {class_separation:.3f} (Output0: {output0_separation:.3f}, Output1: {output1_separation:.3f})")
+            
+            # Calculate accuracy based on the standard approach - average of true positive rates
+            if neuron0_prefers_pattern0 and neuron1_prefers_pattern1:
+                # Scenario 1: Output0->Pattern0, Output1->Pattern1
+                current_accuracy = (pattern_responses['output_0']['pattern_0'] + pattern_responses['output_1']['pattern_1']) / 2
+            elif not neuron0_prefers_pattern0 and not neuron1_prefers_pattern1:
+                # Scenario 2: Output0->Pattern1, Output1->Pattern0
+                current_accuracy = (pattern_responses['output_0']['pattern_1'] + pattern_responses['output_1']['pattern_0']) / 2
+            else:
+                # Single neuron specialization - use the stronger specialization
+                if neuron0_prefers_pattern0:
+                    acc0 = pattern_responses['output_0']['pattern_0']
+                else:
+                    acc0 = pattern_responses['output_0']['pattern_1']
+                    
+                if neuron1_prefers_pattern1:
+                    acc1 = pattern_responses['output_1']['pattern_1']
+                else:
+                    acc1 = pattern_responses['output_1']['pattern_0']
+                    
+                current_accuracy = (acc0 + acc1) / 2
+            
+            # Only add to accuracy history during testing chunks
+            accuracy_history.append(current_accuracy)
+            
+            # Update best accuracy and handle performance changes
+            # Check for BOTH high accuracy AND good class separation
+            combined_performance = current_accuracy * 0.7 + class_separation * 0.3  # Weighted combination
+            best_combined = best_accuracy * 0.7 + best_class_separation * 0.3
+            
+            if current_accuracy >= 0.9 and class_separation >= 0.8:
+                print(f"  EXCELLENT PERFORMANCE ACHIEVED: Accuracy {current_accuracy:.2f}, Class Separation {class_separation:.2f}! Freezing learning permanently.")
+                best_accuracy = current_accuracy
+                best_class_separation = class_separation
+                best_delays = current_delays.copy()
+                learning_frozen = True
+                stable_count = 0
+            # Otherwise check if performance has improved
+            elif combined_performance > best_combined:
+                print(f"  New best performance: Accuracy {current_accuracy:.2f}, Class Separation {class_separation:.2f} (previous: {best_accuracy:.2f}, {best_class_separation:.2f})")
+                best_accuracy = current_accuracy
+                best_class_separation = class_separation
+                best_delays = current_delays.copy()  # Save the best delays
+                stable_count = 0
+                previous_accuracy = current_accuracy
+            # Or if performance has declined
+            elif (current_accuracy < previous_accuracy or class_separation < best_class_separation * 0.8) and not learning_frozen:
+                print(f"  Performance declined: Accuracy {current_accuracy:.2f}, Class Separation {class_separation:.2f}")
+                print(f"  Reverting to best delays (best accuracy: {best_accuracy:.2f}, best separation: {best_class_separation:.2f})")
+                current_delays = best_delays.copy()  # Revert to best delays
+                stable_count += 1
+            else:
+                previous_accuracy = current_accuracy
+                stable_count += 1
+        
+        print(f"  Current accuracy: {current_accuracy:.2f}")
+        print(f"  Response rates:")
+        print(f"  Output0 to Pattern0: {pattern_responses['output_0']['pattern_0']:.2f}")
+        print(f"  Output0 to Pattern1: {pattern_responses['output_0']['pattern_1']:.2f}")
+        print(f"  Output1 to Pattern0: {pattern_responses['output_1']['pattern_0']:.2f}")
+        print(f"  Output1 to Pattern1: {pattern_responses['output_1']['pattern_1']:.2f}")
+
+        all_pairs = find_spike_pairs(
+            populations, 
+            output0_spikes, 
+            output1_spikes, 
+            current_delays
+        )
+
+        # Apply stabilization: reduce learning rates if accuracy is high
+        b_plus = config['B_plus']
+        b_minus = config['B_minus']
+        
+        # Decay learning parameters more gradually
+        decay_factor = np.exp(-chunk / (num_chunks * 0.6))  # Even slower decay (was 0.4)
+        b_plus *= decay_factor
+        b_minus *= decay_factor
+        
+        # Calculate delay variance to detect if specialization is happening
+        delay_values = [current_delays[conn] for conn in current_delays]
+        delay_variance = np.var(delay_values)
+        print(f"  Delay variance: {delay_variance:.3f}")
+        
+        # Decay modulation constant over time but keep it higher for longer
+        mod_const = config['modulation_const'] * max(0.3, decay_factor)
+        
+        # If we're getting specialization (high variance), maintain learning longer
+        if delay_variance > 1.5:
+            # Boost modulation if we have good specialization to maintain it
+            print(f"  Good delay separation detected, maintaining strong modulation")
+            mod_const *= 1.2
+            
+        # If accuracy is above threshold, reduce learning rates but don't kill them too quickly
+        # Only evaluate this during testing chunks or after testing results are available
+        if accuracy_history and accuracy_history[-1] > 0.6:  # Using most recent test accuracy
+            print(f"  Good accuracy detected ({accuracy_history[-1]:.2f}), adjusting learning rates")
+            b_plus *= 0.6  # Less aggressive reduction
+            b_minus *= 0.6  # Less aggressive reduction
+            mod_const *= 0.6  # Also reduce modulation constant
+        
+        # If we've reached a stable period but delays aren't specialized enough, boost learning
+        if stable_count > 5 and delay_variance < 1.0 and best_accuracy < 0.6:
+            print(f"  Delays too similar (variance: {delay_variance:.2f}), boosting learning rates")
+            b_plus = config['B_plus'] * 1.5
+            b_minus = config['B_minus'] * 1.5
+            mod_const = config['modulation_const'] * 1.5
+            # Reset stable count to give more time for learning
+            stable_count = 0
+        
+        # Apply STDP-based delay learning, but only in training chunks
+        new_delays = current_delays.copy()
+        if is_training_chunk:
+            # Check if learning is completely frozen due to excellent accuracy
+            if learning_frozen:
+                print(f"  Learning is frozen due to excellent performance. Using best delays.")
+                new_delays = best_delays.copy()
+                b_plus = 0.0
+                b_minus = 0.0
+                mod_const = 0.0
+                homeostasis_lr = 0.0
+            # If we've reached a stable period (no improvement for several chunks)
+            elif stable_count > 8 and best_accuracy > 0.5:  # Using best_accuracy from testing only
+                print(f"  Stable accuracy for {stable_count} testing chunks, further reducing learning rates")
+                b_plus *= 0.6  # Less aggressive reduction
+                b_minus *= 0.6  # Less aggressive reduction
+                mod_const *= 0.6
+            
+            # Hard stop on learning when stable and accuracy is good AND both neurons are responding
+            # Check that both output neurons are actually firing
+            both_neurons_active = (len(output0_spikes) > 0 and len(output1_spikes) > 0)
+            if not learning_frozen:  # Only check this if learning isn't already frozen
+                if stable_count > 30 and best_accuracy > 0.7 and both_neurons_active:  # Using test accuracy
+                    print(f"  Network has stabilized with good performance, freezing all learning")
+                    learning_frozen = True
+                    current_delays = best_delays.copy()
+                    b_plus = 0.0
+                    b_minus = 0.0
+                    mod_const = 0.0
+                elif stable_count > 20 and not both_neurons_active:
+                    print(f"  WARNING: Only one neuron is responding after {stable_count} stable chunks, boosting learning")
+                    b_plus = config['B_plus'] * 2.0  # Boost learning to encourage both neurons to respond
+                    b_minus = config['B_minus'] * 2.0
+                    mod_const = config['modulation_const'] * 2.0
+                    stable_count = 0
+            
+            print(f"  Using learning rates: B+ = {b_plus:.4f}, B- = {b_minus:.4f}, mod = {mod_const:.4f}")
+            
+            new_delays = apply_delay_learning(
+                current_delays,
+                all_pairs,
+                b_plus,
+                b_minus,
+                config['sigma_plus'],
+                config['sigma_minus'],
+                config['c_threshold'],
+                mod_const,
+                current_accuracy,
+                pattern_responses
+            )
+
+            observed_rates = {
+                'output_0': len(output0_spikes) / patterns_per_chunk,
+                'output_1': len(output1_spikes) / patterns_per_chunk
+            }
+            print("output spike 0:", output0_spikes)
+            print("output spike 1: ", output1_spikes)
+            target_rate = 1.0
+
+            homeostasis_lr = 0.8 * decay_factor  #decay factor
+            
+            # If learning is frozen, disable homeostasis too
+            if learning_frozen:
+                homeostasis_lr = 0.0
+            # Only reduce homeostasis when we have good accuracy AND good delay separation
+            # Use accuracy from testing chunks only
+            elif accuracy_history and accuracy_history[-1] > 0.7 and delay_variance > 1.5:
+                homeostasis_lr *= 0.3
+            elif delay_variance < 1.0:
+                homeostasis_lr *= 1.5
+                print("  Increasing homeostasis to promote delay differentiation")
+            
+            # Only freeze homeostasis if we have both good accuracy, good delay separation, AND both neurons responding
+            if not learning_frozen and stable_count > 10 and best_accuracy > 0.6 and delay_variance > 2.0 and len(output0_spikes) > 0 and len(output1_spikes) > 0:
+                homeostasis_lr *= 0.1
+            
+            # Detect if one neuron is not responding and boost homeostasis for it
+            if not learning_frozen and (len(output0_spikes) == 0 or len(output1_spikes) == 0):
+                print(f"  WARNING: One neuron is not responding : boosting homeostasis")
+                homeostasis_lr *= 3.0  # Significant boost to encourage non-responding neurons
+                
+                # Apply special homeostasis to kick-start silent neurons
+                if len(output0_spikes) == 0:
+                    # If output0 is silent, modify delays to favor it responding
+                    new_delays[('input_0', 'output_0')] = max(1.0, current_delays[('input_0', 'output_0')] * 0.7)
+                    new_delays[('input_1', 'output_0')] = max(1.0, current_delays[('input_1', 'output_0')] * 0.7)
+                    
+                if len(output1_spikes) == 0:
+                    # If output1 is silent, modify delays to favor it responding
+                    new_delays[('input_0', 'output_1')] = max(1.0, current_delays[('input_0', 'output_1')] * 0.7)
+                    new_delays[('input_1', 'output_1')] = max(1.0, current_delays[('input_1', 'output_1')] * 0.7)
+            
+            if not learning_frozen and stable_count > 8 and best_accuracy > 0.8 and len(output0_spikes) > 0 and len(output1_spikes) > 0:
+                print(f"  Freezing homeostasis with stable good performance (based on testing accuracy)")
+                homeostasis_lr = 0.0
+            
+            # If learning is frozen, make sure we're using the best delays
+            if learning_frozen:
+                print(f"  Learning is frozen - using best delays with accuracy {best_accuracy:.2f}")
+                new_delays = best_delays.copy()
+                homeostasis_lr = 0.0
+            
+            # Only apply homeostasis if not frozen
+            if homeostasis_lr > 0:
+                new_delays = delay_homeostasis(
+                    new_delays,
+                    target_rate,
+                    observed_rates,
+                    learning_rate_d=homeostasis_lr,
+                    pattern_responses=pattern_responses
+                )
+
+            print("Delays after learning and homeostasis:")
+            for conn in [('input_0', 'output_0'), ('input_0', 'output_1'), ('input_1', 'output_0'), ('input_1', 'output_1')]:
+                val = new_delays[conn]
+                if isinstance(val, tuple):
+                    val = val[2]
+                print(f"  {conn[0]} → {conn[1]}: {val:.3f} ms")
+
+            current_delays = new_delays.copy()
+        else:
+            print(f"TESTING")
+
+        # Always record delays in history, whether it's a training or testing chunk
+        for key in delay_history:
+            delay_history[key].append(current_delays[key])
+
+        if chunk == num_chunks - 1:
+            final_populations = populations
+
+        sim.end()
+    
+    return {
+        'delay_history': delay_history,
+        'pattern_responses': pattern_responses,
+        'response_history': response_history,
+        'final_delays': current_delays,
+        'best_delays': best_delays,  # Add best delays that achieved highest accuracy
+        'accuracy_history': accuracy_history,
+        'stable_count': stable_count,
+        'best_accuracy': best_accuracy,
+        'learning_frozen': learning_frozen,  # Add whether learning was frozen
+        'all_vm_traces': all_vm_traces,
+        'chunk_modes': chunk_modes,  # Add this to track which chunks were training vs testing
+        'dataset': {  # Add dataset info for membrane potential plots with pattern markings
+            'pattern_start_times': final_pattern_times,
+            'pattern_labels': final_pattern_labels
+        }
+    }
+
+if __name__ == "__main__":
+    config = init_delay_learning()
+    # Run with more chunks and fewer patterns per chunk to enable more frequent updates
+    results = run_chunked_simulation(
+        config, 
+        num_chunks=200,
+        patterns_per_chunk=5,  # Smaller chunks for more frequent updates
+        alternate_train_test=True  # Enable train/test alternation
+    )
+    save_all_visualizations(results, "just_delay")
+    

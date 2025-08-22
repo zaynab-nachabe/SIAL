@@ -25,13 +25,12 @@ def get_neuron_params():
     return NEURON_PARAMS
 
 def get_stdpConfig():
-    STDP_CONFIG = {
-    "A_plus": 0.15,      # Potentiation strength
-    "A_minus": 0.06,     # Depression strength
-    "tau_plus": 20.0,    # Time window for potentiation
-    "tau_minus": 20.0,   # Time window for depression
-    }
-    return STDP_CONFIG
+    # Single STDP configuration with stronger potentiation to encourage learning
+    return {
+        "A_plus": 0.45,        # Significantly higher potentiation
+        "A_minus": 0.20,        # Keep depression moderate
+        "tau_plus": 20.0,
+        "tau_minus": 20.0,    }
 
 def get_input_patterns():
     base_patterns = {
@@ -123,32 +122,100 @@ def find_spike_pairs(populations, output0_spikes, output1_spikes, current_delays
     return all_pairs
 
 def delay_learning_rule(pre_spike_time, post_spike_time, current_delay, 
-                        B_plus=0.1, B_minus=0.1, sigma_plus=10.0, sigma_minus=10.0, 
+                        B_plus=0.2, B_minus=0.2, sigma_plus=10.0, sigma_minus=10.0, 
                         c_threshold=0.5, modulation_cost=0.01):
     
-    current_delays = np.array(current_delays, dtype=float)
-    if np.any(current_delays < c_threshold):
-        new_delays = current_delays + modulation_cost
-        return new_delays
+    delta_t = post_spike_time - pre_spike_time - current_delay
+
+    # Apply piecewise function G with balanced parameters
+    if delta_t >= 0:  # If post fires after pre, decrease the delay
+        delta_delay = -B_minus * np.exp(-delta_t / sigma_minus)
+    else:  # If post fires before pre, increase the delay
+        delta_delay = B_plus * np.exp(delta_t / sigma_plus)
+
+    # Apply small modulation cost to prevent delays from getting too small
+    new_delay = current_delay + delta_delay
     
-    new_delays = []
-
-    for i in range(len(current_delays)):
-        delta_t = post_spike_time - pre_spike_time - current_delays[i]
-
-        #apply piecewise function G
-        if delta_t >= 0:  #if post fires after pre, I decrease the delay
-            delta_delay = -B_minus * np.exp(-delta_t / sigma_minus)
-        else:  #if post fires before pre, I increase the delay
-            delta_delay = B_plus * np.exp(delta_t / sigma_plus)
-
-        new_delays.append(current_delays[i] + delta_delay)
-
-    new_delays = np.array(new_delays) + modulation_cost
-
-    return new_delays
+    # Apply threshold constraint
+    if new_delay < c_threshold:
+        new_delay = c_threshold + modulation_cost
+        
+    return new_delay
 
 
+
+def normalize_weights(pops, normalization_factor=1.0, pattern_specific=True):
+    """
+    Apply homeostatic normalization to ensure weights remain balanced
+    across each neuron's inputs while preserving specialization.
+    
+    Args:
+        pops: Dictionary containing population and projection information
+        normalization_factor: Target sum for normalization (default 1.0)
+        pattern_specific: If True, normalize to favor pattern specialization
+    """
+    projections = pops["projections"]
+    
+    # Get current weights
+    weights = {}
+    for conn_key, projection in projections.items():
+        weight_data = projection.get('weight', 'list')
+        # Handle weight data which might be a list of tuples or a simple list
+        if isinstance(weight_data[0], tuple):
+            weights[conn_key] = float(weight_data[0][0])
+        else:
+            weights[conn_key] = float(weight_data[0])
+    
+    # Apply higher minimum weight floor to prevent weights from becoming too small
+    min_weight = 0.15  # Increased to prevent weights from going to zero
+    
+    # Force weights to be at least the minimum
+    for conn_key in weights:
+        if weights[conn_key] < min_weight:
+            weights[conn_key] = min_weight
+            projections[conn_key].set(weight=min_weight)
+    
+    # Normalize weights for output neuron 0 - maintain relative strengths
+    weights_out0 = [
+        weights[("input_0", "output_0")],
+        weights[("input_1", "output_0")]
+    ]
+        
+    # Calculate normalization for output neuron 0
+    sum_weights_out0 = sum(weights_out0)
+    if sum_weights_out0 > 0:
+        # Ensure normalization while maintaining at least min_weight
+        scale_factor_out0 = normalization_factor / sum_weights_out0
+        new_weights_0 = [w * scale_factor_out0 for w in weights_out0]
+        
+        # Re-check minimums after normalization
+        if min(new_weights_0) < min_weight:
+            # Adjust scaling to ensure minimum weight is preserved
+            deficit = min_weight - min(new_weights_0)
+            new_weights_0 = [w + deficit for w in new_weights_0]
+            
+        projections[("input_0", "output_0")].set(weight=new_weights_0[0])
+        projections[("input_1", "output_0")].set(weight=new_weights_0[1])
+
+    # Normalize weights for output neuron 1
+    weights_out1 = [
+        weights[("input_0", "output_1")],
+        weights[("input_1", "output_1")]
+    ]
+        
+    # Calculate normalization for output neuron 1
+    sum_weights_out1 = sum(weights_out1)
+    if sum_weights_out1 > 0:
+        # Ensure normalization while maintaining at least min_weight
+        scale_factor_out1 = normalization_factor / sum_weights_out1
+        new_weights_1 = [w * scale_factor_out1 for w in weights_out1]
+        
+        if min(new_weights_1) < min_weight:
+            deficit = min_weight - min(new_weights_1)
+            new_weights_1 = [w + deficit for w in new_weights_1]
+            
+        projections[("input_0", "output_1")].set(weight=new_weights_1[0])
+        projections[("input_1", "output_1")].set(weight=new_weights_1[1])
 
 def delay_homeostasis(current_delays, R_target, R_observed, learning_rate_d=0.8, pattern_responses=None):
     new_delays = current_delays.copy()
@@ -174,12 +241,9 @@ def delay_homeostasis(current_delays, R_target, R_observed, learning_rate_d=0.8,
         output1_pattern0 = pattern_responses['output_1']['pattern_0']
         output1_pattern1 = pattern_responses['output_1']['pattern_1']
         
-        # Check if any specialization has emerged
         output0_diff = abs(output0_pattern0 - output0_pattern1)
         output1_diff = abs(output1_pattern0 - output1_pattern1)
         
-        # If we have some emerging specialization, subtly reinforce it
-        # This uses competition without explicit supervision
         if output0_diff > 0.1 or output1_diff > 0.1:
             # Find shorter delays to further shorten them
             connections = [('input_0', 'output_0'), ('input_0', 'output_1'), 
@@ -271,22 +335,25 @@ def create_populations(input_spikes, weights, NEURON_PARAMS, init_delay_range=(3
     output_pop_0.record(("spikes", "v"))
     output_pop_1.record(("spikes", "v"))
 
-    # Set initial delays
+    # Use strategic initial delays to break symmetry but not bias toward a specific specialization
     if init_delays is not None and isinstance(init_delays, dict):
         d0_in0 = init_delays.get(("input_0", "output_0"), random.uniform(*init_delay_range))
         d0_in1 = init_delays.get(("input_0", "output_1"), random.uniform(*init_delay_range))
         d1_in0 = init_delays.get(("input_1", "output_0"), random.uniform(*init_delay_range))
         d1_in1 = init_delays.get(("input_1", "output_1"), random.uniform(*init_delay_range))
     else:
-        d0_in0 = random.uniform(*init_delay_range)
-        d0_in1 = random.uniform(*init_delay_range)
-        d1_in0 = random.uniform(*init_delay_range)
-        d1_in1 = random.uniform(*init_delay_range)
+        # Add small random variations around the middle of the range to break symmetry
+        mid_delay = (init_delay_range[0] + init_delay_range[1]) / 2
+        variation = (init_delay_range[1] - init_delay_range[0]) * 0.2  # 20% of range
+        d0_in0 = mid_delay + random.uniform(-variation, variation)
+        d0_in1 = mid_delay + random.uniform(-variation, variation)
+        d1_in0 = mid_delay + random.uniform(-variation, variation)
+        d1_in1 = mid_delay + random.uniform(-variation, variation)
 
-    # STDP mechanism
+    # Get STDP parameters
     stdp_config = get_stdpConfig()
     
-    # Create separate STDP models for each connection with proper initial values
+    # Create STDP mechanisms with the same parameters but different weights/delays
     stdp_model_00 = sim.STDPMechanism(
         timing_dependence=sim.SpikePairRule(
             tau_plus=stdp_config["tau_plus"],
@@ -299,18 +366,6 @@ def create_populations(input_spikes, weights, NEURON_PARAMS, init_delay_range=(3
         delay=d0_in0
     )
     
-    stdp_model_01 = sim.STDPMechanism(
-        timing_dependence=sim.SpikePairRule(
-            tau_plus=stdp_config["tau_plus"],
-            tau_minus=stdp_config["tau_minus"],
-            A_plus=stdp_config["A_plus"],
-            A_minus=stdp_config["A_minus"]
-        ),
-        weight_dependence=sim.AdditiveWeightDependence(w_min=0.0, w_max=1.0),
-        weight=weights[0],
-        delay=d0_in1
-    )
-    
     stdp_model_10 = sim.STDPMechanism(
         timing_dependence=sim.SpikePairRule(
             tau_plus=stdp_config["tau_plus"],
@@ -321,6 +376,18 @@ def create_populations(input_spikes, weights, NEURON_PARAMS, init_delay_range=(3
         weight_dependence=sim.AdditiveWeightDependence(w_min=0.0, w_max=1.0),
         weight=weights[1],
         delay=d1_in0
+    )
+    
+    stdp_model_01 = sim.STDPMechanism(
+        timing_dependence=sim.SpikePairRule(
+            tau_plus=stdp_config["tau_plus"],
+            tau_minus=stdp_config["tau_minus"],
+            A_plus=stdp_config["A_plus"],
+            A_minus=stdp_config["A_minus"]
+        ),
+        weight_dependence=sim.AdditiveWeightDependence(w_min=0.0, w_max=1.0),
+        weight=weights[0],
+        delay=d0_in1
     )
     
     stdp_model_11 = sim.STDPMechanism(
@@ -359,9 +426,14 @@ def create_populations(input_spikes, weights, NEURON_PARAMS, init_delay_range=(3
         receptor_type="excitatory"
     )
 
-    # Inhibitory connections (static)
+    # Balanced bidirectional lateral inhibition for competitive learning
     conn_out0_out1 = sim.Projection(
         output_pop_0, output_pop_1, sim.AllToAllConnector(),
+        synapse_type=sim.StaticSynapse(weight=inh_weight, delay=inh_delay),
+        receptor_type="inhibitory"
+    )
+    conn_out1_out0 = sim.Projection(
+        output_pop_1, output_pop_0, sim.AllToAllConnector(),
         synapse_type=sim.StaticSynapse(weight=inh_weight, delay=inh_delay),
         receptor_type="inhibitory"
     )
@@ -387,16 +459,16 @@ def create_populations(input_spikes, weights, NEURON_PARAMS, init_delay_range=(3
 def init_delay_learning(
     num_presentations=5,
     pattern_interval=30,
-    B_plus = 0.25,         # Increased from 0.2 to strengthen STDP
-    B_minus = 0.2,         # Increased from 0.15 to strengthen STDP
+    B_plus = 0.2,          # Balanced STDP parameters
+    B_minus = 0.2,         # Equal potentiation and depression
     sigma_plus = 10.0,
     sigma_minus = 10.0,
     c_threshold = 0.5,
-    modulation_const = 0.15,  # Increased from 0.07 for stronger competition
-    init_delay_range= (1.0, 15.0),
-    weights = (0.07, 0.07),   # Increased from 0.05 for stronger excitation
-    inh_weight = 2.0,         # Increased from 1.5 for even stronger competition
-    inh_delay = 1.0,          # Decreased from 1.5 for faster competition
+    modulation_const = 0.1,  # Moderate competition strength
+    init_delay_range= (2.0, 8.0),  # Moderate delay range
+    weights = (0.20, 0.20),   # Higher initial weights to prevent collapse
+    inh_weight = 1.8,         # Stronger lateral inhibition for better competition
+    inh_delay = 1.0,          # Fast inhibition for WTA dynamics
     timestep=0.01,
     seed=None
 ):
@@ -452,17 +524,9 @@ def apply_delay_learning(current_delays, all_pairs, B_plus, B_minus,
                          current_accuracy=0.0, pattern_responses=None):
     new_delays = current_delays.copy()
     
-    # Zero-sum modulation will be applied based on STDP activity only
-    # This removes pattern-specific supervision
-    connections_to_strengthen = []
-    connections_to_weaken = []
-    
-    # We'll let STDP alone drive the specialization without 
-    # explicitly defining which connections should be strengthened or weakened
-    
-    # Process each connection with STDP
+    # Process each connection with delay learning rule
     for connection, pairs in all_pairs.items():
-        # Skip empty connections but include them in modulation later
+        # Skip empty connections
         if len(pairs) == 0:
             continue
         
@@ -472,28 +536,27 @@ def apply_delay_learning(current_delays, all_pairs, B_plus, B_minus,
         else:
             current_delay = current_delays[connection]
         
-        # Skip STDP for delays below threshold
-        if current_delay < c_threshold:
-            continue
-        
-        # Calculate STDP changes
+        # Apply delay learning rule to each spike pair
         delta_delays = []
         for pre_time, post_time in pairs:
+            # Calculate time difference
             delta_t = post_time - (pre_time + current_delay)
             
+            # Apply the learning rule
             if delta_t >= 0:
                 delta_delay = -B_minus * np.exp(-delta_t / sigma_minus)
             else:
                 delta_delay = B_plus * np.exp(delta_t / sigma_plus)
-            
+                
             delta_delays.append(delta_delay)
         
-        # Apply average STDP change if we have any
+        # Apply average change from all pairs
         if delta_delays:
             avg_delta = np.mean(delta_delays)
-            
-            # Apply STDP without modulation yet
             new_delay = current_delay + avg_delta
+            
+            # Ensure delay stays within reasonable bounds
+            new_delay = max(c_threshold, min(20.0, new_delay))
             
             # Store the updated delay
             if isinstance(current_delays[connection], tuple):
@@ -502,104 +565,46 @@ def apply_delay_learning(current_delays, all_pairs, B_plus, B_minus,
             else:
                 new_delays[connection] = new_delay
     
-    # Apply enhanced competitive modulation to promote stronger differentiation
+    # Apply a small competitive modulation
     if modulation_const > 0:
-        # Calculate activity levels for each connection (how many spike pairs)
+        # Calculate activity levels for each connection
         activity_levels = {}
         for connection in all_pairs:
             activity_levels[connection] = len(all_pairs[connection])
         
-        # Calculate timing precision for each connection
-        timing_precision = {}
-        for connection, pairs in all_pairs.items():
-            if len(pairs) > 0:
-                # Calculate timing variance (lower is better)
-                timing_diffs = []
-                if isinstance(current_delays[connection], tuple):
-                    current_delay = current_delays[connection][2]
-                else:
-                    current_delay = current_delays[connection]
-                
-                for pre_time, post_time in pairs:
-                    delta_t = post_time - (pre_time + current_delay)
-                    timing_diffs.append(abs(delta_t))
-                
-                # Lower variance means better timing precision
-                if timing_diffs:
-                    precision = 1.0 / (1.0 + np.mean(timing_diffs))
-                    timing_precision[connection] = precision
-                else:
-                    timing_precision[connection] = 0.0
-            else:
-                timing_precision[connection] = 0.0
+        # Group connections by input and output
+        input0_conns = [(conn, activity_levels[conn]) for conn in activity_levels if conn[0] == 'input_0']
+        input1_conns = [(conn, activity_levels[conn]) for conn in activity_levels if conn[0] == 'input_1']
         
-        # Combine activity and precision for fitness score
-        fitness_scores = {}
-        if sum(activity_levels.values()) > 0:
-            # Normalize activity levels
-            total_activity = max(1, sum(activity_levels.values()))
-            for connection in activity_levels:
-                norm_activity = activity_levels[connection] / total_activity
-                norm_precision = timing_precision.get(connection, 0.0)
-                # Weighted combination favoring connections that are both active and precise
-                fitness_scores[connection] = (0.7 * norm_activity) + (0.3 * norm_precision)
-            
-            # Sort connections by fitness score
-            sorted_connections = sorted(
-                fitness_scores.items(), 
-                key=lambda x: x[1], 
-                reverse=True
-            )
-            
-            # Group connections by input and output neurons
-            input0_conns = [conn for conn in sorted_connections if conn[0][0] == 'input_0']
-            input1_conns = [conn for conn in sorted_connections if conn[0][0] == 'input_1']
-            output0_conns = [conn for conn in sorted_connections if conn[0][1] == 'output_0']
-            output1_conns = [conn for conn in sorted_connections if conn[0][1] == 'output_1']
-            
-            # Ensure competition among connections from same input or to same output
-            # This forces specialization without explicit supervision
-            
-            # Strongest connection for each input gets strengthened, weaker gets weakened
-            for input_group in [input0_conns, input1_conns]:
-                if len(input_group) > 0:
-                    best_conn = input_group[0][0]
-                    # Strengthen best connection
+        # For each input, strengthen the most active connection and weaken others
+        for input_group in [input0_conns, input1_conns]:
+            if len(input_group) > 0:
+                # Sort by activity (descending)
+                sorted_conns = sorted(input_group, key=lambda x: x[1], reverse=True)
+                
+                # If we have a clear winner (at least 25% more active)
+                if len(sorted_conns) > 1 and sorted_conns[0][1] > 0 and sorted_conns[0][1] >= sorted_conns[1][1] * 1.25:
+                    # Strengthen winner
+                    best_conn = sorted_conns[0][0]
                     if isinstance(new_delays[best_conn], tuple):
                         current_val = new_delays[best_conn][2]
-                        new_val = max(1.0, current_val - modulation_const * 2.0)
+                        new_val = max(c_threshold, current_val - modulation_const * 0.5)
                         new_delays[best_conn] = (new_delays[best_conn][0], new_delays[best_conn][1], new_val)
                     else:
-                        new_delays[best_conn] = max(1.0, new_delays[best_conn] - modulation_const * 2.0)
+                        new_delays[best_conn] = max(c_threshold, new_delays[best_conn] - modulation_const * 0.5)
                     
-                    # Weaken other connections from same input
-                    for conn_info in input_group[1:]:
+                    # Weaken others slightly
+                    for conn_info in sorted_conns[1:]:
                         conn = conn_info[0]
-                        if isinstance(new_delays[conn], tuple):
-                            current_val = new_delays[conn][2]
-                            new_val = min(15.0, current_val + modulation_const * 3.0)
-                            new_delays[conn] = (new_delays[conn][0], new_delays[conn][1], new_val)
-                        else:
-                            new_delays[conn] = min(15.0, new_delays[conn] + modulation_const * 3.0)
-            
-            # Similarly, ensure each output neuron specializes
-            for output_group in [output0_conns, output1_conns]:
-                if len(output_group) > 0:
-                    best_conn = output_group[0][0]
-                    # Already strengthened above, so just weaken others
-                    for conn_info in output_group[1:]:
-                        conn = conn_info[0]
-                        if isinstance(new_delays[conn], tuple):
-                            current_val = new_delays[conn][2]
-                            new_val = min(15.0, current_val + modulation_const * 2.0)
-                            new_delays[conn] = (new_delays[conn][0], new_delays[conn][1], new_val)
-                        else:
-                            new_delays[conn] = min(15.0, new_delays[conn] + modulation_const * 2.0)
+                        if conn_info[1] > 0:  # Only modify if there was some activity
+                            if isinstance(new_delays[conn], tuple):
+                                current_val = new_delays[conn][2]
+                                new_val = min(20.0, current_val + modulation_const * 0.5)
+                                new_delays[conn] = (new_delays[conn][0], new_delays[conn][1], new_val)
+                            else:
+                                new_delays[conn] = min(20.0, new_delays[conn] + modulation_const * 0.5)
     
-    # Final delay bounds enforcement - apply broader bounds to allow differentiation
-    # but prevent extreme values or convergence to similar values
-    
-    # First, check if delays are too similar and add noise if needed
+    # Ensure delays don't become too similar - add small random noise if needed
     delay_values = []
     for connection in new_delays:
         if isinstance(new_delays[connection], tuple):
@@ -607,36 +612,38 @@ def apply_delay_learning(current_delays, all_pairs, B_plus, B_minus,
         else:
             delay_values.append(new_delays[connection])
     
-    # Calculate variance in delays
-    delay_variance = np.var(delay_values)
-    
-    # If variance is too low, add some noise to break symmetry
-    if delay_variance < 0.5:  # Delays too similar
+    # If variance is too low, add noise to break symmetry
+    if np.var(delay_values) < 0.3:
         for connection in new_delays:
             if isinstance(new_delays[connection], tuple):
                 current_val = new_delays[connection][2]
-                # Add random noise of up to ±0.5ms
-                noise = np.random.uniform(-0.5, 0.5)
+                noise = np.random.uniform(-0.2, 0.2)
                 new_val = current_val + noise
                 new_delays[connection] = (new_delays[connection][0], new_delays[connection][1], new_val)
             else:
                 current_val = new_delays[connection]
-                noise = np.random.uniform(-0.5, 0.5)
+                noise = np.random.uniform(-0.2, 0.2)
                 new_delays[connection] = current_val + noise
     
-    # Apply general bounds to prevent extreme values
+    # Apply final bounds to prevent extreme values
     for connection in new_delays:
         if isinstance(new_delays[connection], tuple):
             delay_value = new_delays[connection][2]
-            delay_value = max(1.0, min(15.0, delay_value))
+            delay_value = max(c_threshold, min(20.0, delay_value))
             new_delays[connection] = (new_delays[connection][0], new_delays[connection][1], delay_value)
         else:
-            new_delays[connection] = max(1.0, min(15.0, new_delays[connection]))
+            new_delays[connection] = max(c_threshold, min(20.0, new_delays[connection]))
     
     return new_delays
 
 def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
     delay_history = {
+        ('input_0', 'output_0'): [],
+        ('input_0', 'output_1'): [],
+        ('input_1', 'output_0'): [],
+        ('input_1', 'output_1'): []
+    }
+    weight_history = {
         ('input_0', 'output_0'): [],
         ('input_0', 'output_1'): [],
         ('input_1', 'output_0'): [],
@@ -649,11 +656,25 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
     
     # Start with initial delays that have slight randomization to break symmetry
     # This helps bootstrap specialization without explicit supervision
+    mid_delay = (config['init_delay_range'][0] + config['init_delay_range'][1]) / 2
+    variation = (config['init_delay_range'][1] - config['init_delay_range'][0]) * 0.2
     current_delays = {
-        ('input_0', 'output_0'): 3.0 + np.random.uniform(-0.5, 0.5),  # Around 3ms
-        ('input_0', 'output_1'): 7.0 + np.random.uniform(-0.5, 0.5),  # Around 7ms
-        ('input_1', 'output_0'): 7.0 + np.random.uniform(-0.5, 0.5),  # Around 7ms
-        ('input_1', 'output_1'): 3.0 + np.random.uniform(-0.5, 0.5)   # Around 3ms
+        ('input_0', 'output_0'): mid_delay + np.random.uniform(-variation, variation),
+        ('input_0', 'output_1'): mid_delay + np.random.uniform(-variation, variation),
+        ('input_1', 'output_0'): mid_delay + np.random.uniform(-variation, variation),
+        ('input_1', 'output_1'): mid_delay + np.random.uniform(-variation, variation)
+    }
+    
+    # Add slight asymmetry to initial weights to break symmetry and encourage specialization
+    initial_weights = list(config['weights'])
+    weight_jitter = 0.05  # 5% jitter
+    
+    # Initialize weights with jitter to break symmetry
+    init_weights = {
+        ('input_0', 'output_0'): initial_weights[0] * (1 + np.random.uniform(-weight_jitter, weight_jitter)),
+        ('input_0', 'output_1'): initial_weights[0] * (1 + np.random.uniform(-weight_jitter, weight_jitter)),
+        ('input_1', 'output_0'): initial_weights[1] * (1 + np.random.uniform(-weight_jitter, weight_jitter)),
+        ('input_1', 'output_1'): initial_weights[1] * (1 + np.random.uniform(-weight_jitter, weight_jitter))
     }
     
     # Initialize accuracy tracking
@@ -662,7 +683,11 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
     stable_count = 0
     
     for key in delay_history:
-        delay_history[key].append(current_delays[key])
+        # Extract delay value from tuple if necessary
+        if isinstance(current_delays[key], tuple):
+            delay_history[key].append(current_delays[key][2])
+        else:
+            delay_history[key].append(current_delays[key])
     
     final_populations = None
     all_vm_traces = []
@@ -694,18 +719,34 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
             specific_pattern=chosen_pattern
         )
 
-        populations = create_populations(
-            current_dataset['input_spikes'],
-            config['weights'],
-            config['NEURON_PARAMS'],
-            init_delay_range=config['init_delay_range'],
+        # Use jittered weights for the first chunk to break symmetry
+        if chunk == 0:
+            populations = create_populations(
+                current_dataset['input_spikes'], 
+                (init_weights[('input_0', 'output_0')], init_weights[('input_1', 'output_0')]),
+                config['NEURON_PARAMS'],
+                init_delay_range=config['init_delay_range'],
+                init_delays=current_delays,
+                inh_weight=config['inh_weight'],
+                inh_delay=config['inh_delay']
+            )
+        else:
+            populations = create_populations(
+                current_dataset['input_spikes'], 
+                config['weights'],
+                config['NEURON_PARAMS'],
+                init_delay_range=config['init_delay_range'],
             init_delays=current_delays,
             inh_weight=config['inh_weight'],
             inh_delay=config['inh_delay']
         )
 
+        # Run simulation with chunk duration
         chunk_duration = patterns_per_chunk * config['pattern_interval']
         sim.run(chunk_duration)
+        
+        # Apply homeostatic weight normalization to promote specialization
+        normalize_weights(populations, normalization_factor=1.0)
 
         output0_spikes = populations['output_0'].get_data().segments[0].spiketrains[0]
         output1_spikes = populations['output_1'].get_data().segments[0].spiketrains[0]
@@ -754,6 +795,26 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
         print(f"  Input1->Output0: {current_delays[('input_1', 'output_0')]:.2f}ms")
         print(f"  Input0->Output1: {current_delays[('input_0', 'output_1')]:.2f}ms")
         print(f"  Input1->Output1: {current_delays[('input_1', 'output_1')]:.2f}ms")
+        
+        # Get and print current weights
+        weights = {}
+        for conn_key in [('input_0', 'output_0'), ('input_1', 'output_0'), ('input_0', 'output_1'), ('input_1', 'output_1')]:
+            weight_data = populations['projections'][conn_key].get("weight", format="list")[0]
+            # Handle weight data which might be a tuple or a simple value
+            if isinstance(weight_data, tuple):
+                weights[conn_key] = float(weight_data[0])
+            else:
+                weights[conn_key] = float(weight_data)
+        
+        print(f"  Current weights:")
+        print(f"  Input0->Output0: {weights[('input_0', 'output_0')]:.4f}")
+        print(f"  Input1->Output0: {weights[('input_1', 'output_0')]:.4f}")
+        print(f"  Input0->Output1: {weights[('input_0', 'output_1')]:.4f}")
+        print(f"  Input1->Output1: {weights[('input_1', 'output_1')]:.4f}")
+        
+        # Store weights in history
+        for key in weight_history:
+            weight_history[key].append(weights[key])
         
         # Calculate response differential (how much more a neuron responds to its preferred pattern)
         if neuron0_prefers_pattern0 and neuron1_prefers_pattern1:
@@ -928,7 +989,11 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
         current_delays = new_delays.copy()
 
         for key in delay_history:
-            delay_history[key].append(current_delays[key])
+            # Extract delay value from tuple if necessary
+            if isinstance(current_delays[key], tuple):
+                delay_history[key].append(current_delays[key][2])
+            else:
+                delay_history[key].append(current_delays[key])
 
         if chunk == num_chunks - 1:
             final_populations = populations
@@ -937,6 +1002,7 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
     
     return {
         'delay_history': delay_history,
+        'weight_history': weight_history,
         'pattern_responses': pattern_responses,
         'response_history': response_history,
         'final_delays': current_delays,
@@ -946,6 +1012,31 @@ def run_chunked_simulation(config, num_chunks=10, patterns_per_chunk=10):
     }
 
 if __name__ == "__main__":
-    config = init_delay_learning()
-    results = run_chunked_simulation(config, num_chunks=100, patterns_per_chunk=10)
-    save_all_visualizations(results, "stdp_and_delays")
+    # Update main parameters to optimize combined learning
+    config = init_delay_learning(
+        # Increase number of presentations per pattern for better learning
+        num_presentations=10,
+        # Stronger STDP learning rates
+        B_plus=0.35,  
+        B_minus=0.30,
+        # Stronger competitive modulation
+        modulation_const=0.20,
+        # Stronger initial weights for better responsiveness
+        weights=(0.25, 0.25),
+        # Balanced inhibition for better competition
+        inh_weight=1.2,
+        # Faster inhibition for quicker competition
+        inh_delay=0.8,
+        # Random seed for reproducibility
+        seed=42
+    )
+    
+    # Run simulation with more chunks for better learning
+    results = run_chunked_simulation(
+        config, 
+        num_chunks=100,
+        patterns_per_chunk=10
+    )
+    
+    # Save the visualization with an identifiable name
+    save_all_visualizations(results, "stdp_and_delay")

@@ -442,4 +442,4 @@ def run_specialized_neurons_test(num_presentations=5):
     return experiment_name
 
 if __name__ == "__main__":
-    run_specialized_neurons_test(num_presentations=5)
+    run_specialized_neurons_test(num_presentations=30)
