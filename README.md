@@ -103,31 +103,6 @@ cd Dumbo
 python DUMBO.py
 ```
 
-### Visualizing Results
-```python
-# From the main directory
-python just_delay/visualisation_and_metrics.py --results_dir results/
-```
-
-### Example: Creating a Custom Spiking Pattern
-```python
-# Sample code to create a custom spiking pattern
-import numpy as np
-from just_delay.SIAL import create_pattern
-
-# Create a simple pattern with 5 input neurons and 3 output neurons
-input_spikes = [
-    [10, 20, 30],  # Neuron 1 spikes at times 10, 20, 30 ms
-    [15, 25, 35],  # Neuron 2 spikes at times 15, 25, 35 ms
-    [5, 40],       # Neuron 3 spikes at times 5, 40 ms
-    [22, 44],      # Neuron 4 spikes at times 22, 44 ms
-    [18, 36, 54]   # Neuron 5 spikes at times 18, 36, 54 ms
-]
-
-# Test the pattern with the network
-test_pattern(input_spikes)
-```
-
 ## Reproducing Experiments
 
 To reproduce the results presented in the Final Report:
@@ -140,19 +115,16 @@ To reproduce the results presented in the Final Report:
 
 2. **STDP-only Network**:
    ```bash
-   cd just_stdp
-   python stdp.py --epochs 100 --save_results
+   python stdp.py
    ```
 
 3. **Delay Learning Network**:
    ```bash
    cd just_delay
-   python run_delay_learning_experiment.py --full --save_results
+   python just_delay.py 
    ```
 
 4. **Combined Approach**:
    ```bash
-   # When implemented
-   cd stdp&delay
-   python combined_learning.py --epochs 100 --save_results
+   python stdp_and_delay.py 
    ```
