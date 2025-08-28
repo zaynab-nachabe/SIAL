@@ -34,7 +34,6 @@ if options.debug:
     os.makedirs('./logs', exist_ok=True)
     init_logging('logs/'+dt.now().strftime("%Y%m%d-%H%M%S")+'.txt', debug=True)
 
-# Define audio file paths - explicitly set the path to the orca whale sounds
 audio_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
 orca_file_short = os.path.join(audio_folder, "int_orca.wav")
 orca_file_long = os.path.join(audio_folder, "ngsorca03.wav")
@@ -48,19 +47,19 @@ sim.setup(timestep=0.01)
 
 if options.noise: 
     parameters = {
-        'Rtarget':  0.008,      # Increased target activation rate 
-        'lambda_w': 0.0002,     # Significantly increased for faster learning
-        'lambda_d': 0.001,      # Significantly increased for faster learning
-        'STDP_w':   0.04,       # Increased for stronger weight changes
-        'STDP_d':   4.0         # Increased for stronger delay changes
+        'Rtarget':  0.008,#activation rate
+        'lambda_w': 0.0002, 
+        'lambda_d': 0.001,
+        'STDP_w':   0.04,
+        'STDP_d':   4.0
     }
 else:
     parameters = {
-        'Rtarget':  0.01,       # Increased target activation rate
-        'lambda_w': 0.0003,     # Significantly increased for faster learning
-        'lambda_d': 0.003,      # Significantly increased for faster learning
-        'STDP_w':   0.04,       # Increased for stronger weight changes
-        'STDP_d':   4.0         # Increased for stronger delay changes
+        'Rtarget':  0.01,#target activation rate
+        'lambda_w': 0.0003,
+        'lambda_d': 0.003,
+        'STDP_w':   0.04,
+        'STDP_d':   4.0
     }
 
 OUTPUT_PATH_GENERIC = "./results"
@@ -73,11 +72,13 @@ NB_CONV_LAYERS = options.nb_convolution
 if NB_CONV_LAYERS < 2 or NB_CONV_LAYERS > 8:
     sys.exit("[Error] The number of convolution layers should be at least 2. The current implementation allows for a maximum number of layers of 4.")
 
-# Define patterns instead of directions
+# Define patterns
 PATTERNS = {
-    -1: "UNKNOWN"
+    -1: "UNKNOWN",
+    1: "ORCA_SHORT",
+    2: "ORCA_LONG"
 }
-NB_PATTERNS = 1  # Will be updated based on actual patterns
+NB_PATTERNS = 2
 
 LEARNING = False
 learning_time = 'NA'
@@ -98,12 +99,11 @@ temporal_reduction = 1e3
 
 # Apply quick mode settings if enabled
 if options.quick:
-    # Drastically reduce simulation parameters for quick testing
-    time_data = min(time_data, 1000)  # Max 1000 timesteps
+    time_data = min(time_data, 1000) 
     pattern_interval = 50
     pattern_duration = 50
     
-    # Important: Keep the original network dimensions for quick mode
+    # Keep the original network dimensions for quick mode
     # This ensures all indices remain valid throughout the simulation
     x_input = 13
     y_input = 13
@@ -133,7 +133,7 @@ if 'x_input' not in locals():
 
     x_margin = y_margin = 4
 
-# Define audio file paths - explicitly set the path to the orca whale sounds
+# Define audio file paths 
 audio_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
 orca_file_short = os.path.join(audio_folder, "int_orca.wav")  # Short orca sound sample
 orca_file_long = os.path.join(audio_folder, "ngsorca03.wav")  # Long orca sound sample
