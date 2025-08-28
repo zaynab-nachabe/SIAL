@@ -77,7 +77,7 @@ python -m venv sial_env
 source sial_env/bin/activate  # On Windows: sial_env\Scripts\activate
 
 # Install dependencies
-pip install numpy matplotlib scipy librosa  # Add any other dependencies your project uses
+pip install numpy matplotlib scipy librosa pyNN
 ```
 
 ## Usage Examples
