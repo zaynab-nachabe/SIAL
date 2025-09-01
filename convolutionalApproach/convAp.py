@@ -1,4 +1,5 @@
 #!/bin/python
+"""Building up on Amlie Gruel's work in her repository Delay_Learning"""
 import sys, os
 from typing import Any
 import itertools as it
@@ -154,7 +155,6 @@ else:
     y_output = y_input - filter_y + 1
 
 
-# Function to generate spike patterns from audio files
 def generate_audio_spike_patterns(audio_folder, x_size=13, y_size=13, pattern_duration=100, sample_rate=22050, time_compression=10.0, specific_files=None):
     """
     Generate a dataset of spike patterns from audio files.
@@ -185,7 +185,6 @@ def generate_audio_spike_patterns(audio_folder, x_size=13, y_size=13, pattern_du
     
     # Get list of audio files
     if specific_files:
-        # Use only the specified files
         audio_files = [f for f in specific_files if os.path.exists(os.path.join(audio_folder, f))]
         print(f"Using specific files: {audio_files}")
     else:
@@ -199,7 +198,7 @@ def generate_audio_spike_patterns(audio_folder, x_size=13, y_size=13, pattern_du
     
     # Load and process each audio file
     patterns = {}
-    for i, audio_file in enumerate(audio_files[:2]):  # Limit to 2 patterns as requested
+    for i, audio_file in enumerate(audio_files[:2]):  # Limit to 2
         file_path = os.path.join(audio_folder, audio_file)
         print("Loading audio file: {}".format(file_path))
         
